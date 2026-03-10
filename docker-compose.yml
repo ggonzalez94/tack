@@ -23,7 +23,7 @@ services:
       DATABASE_PATH: "/app/data/tack.db"
       DELEGATE_URL: "http://ipfs:8080/ipfs"
       X402_ENABLED: "false"
-      X402_FACILITATOR_URL: "https://facilitator.x402.org"
+      X402_FACILITATOR_URL: "https://facilitator.taiko.xyz"
       X402_NETWORK: "eip155:167000"
       X402_PAY_TO: "0x0000000000000000000000000000000000000001"
       X402_USDC_ASSET_ADDRESS: "0x0000000000000000000000000000000000000001"

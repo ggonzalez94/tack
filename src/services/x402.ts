@@ -24,6 +24,8 @@ export interface X402PaymentConfig {
   payTo: string;
   usdcAssetAddress: string;
   usdcAssetDecimals: number;
+  usdcDomainName: string;
+  usdcDomainVersion: string;
   basePriceUsd: number;
   pricePerMbUsd: number;
   maxPriceUsd: number;
@@ -380,8 +382,9 @@ export function createX402PaymentMiddleware(
   const facilitator = facilitatorClient ?? new HTTPFacilitatorClient({ url: config.facilitatorUrl });
   const resourceServer = new x402ResourceServer(facilitator).register(config.network, new ExactEvmScheme());
   const exactTransferExtra = {
-    assetTransferMethod: 'permit2'
-  } as const;
+    name: config.usdcDomainName,
+    version: config.usdcDomainVersion
+  };
   const routes: RoutesConfig = {
     'POST /pins': {
       accepts: {

@@ -39,6 +39,8 @@ const paymentMiddleware = config.x402Enabled
       payTo: config.x402PayTo,
       usdcAssetAddress: config.x402UsdcAssetAddress,
       usdcAssetDecimals: config.x402UsdcAssetDecimals,
+      usdcDomainName: config.x402UsdcDomainName,
+      usdcDomainVersion: config.x402UsdcDomainVersion,
       basePriceUsd: config.x402BasePriceUsd,
       pricePerMbUsd: config.x402PricePerMbUsd,
       maxPriceUsd: config.x402MaxPriceUsd

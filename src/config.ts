@@ -19,6 +19,8 @@ export interface AppConfig {
   x402PayTo: string;
   x402UsdcAssetAddress: string;
   x402UsdcAssetDecimals: number;
+  x402UsdcDomainName: string;
+  x402UsdcDomainVersion: string;
   x402BasePriceUsd: number;
   x402PricePerMbUsd: number;
   x402MaxPriceUsd: number;
@@ -117,11 +119,13 @@ export function getConfig(): AppConfig {
       'RATE_LIMIT_REQUESTS_PER_MINUTE'
     ),
     x402Enabled: parseBoolean(process.env.X402_ENABLED, false),
-    x402FacilitatorUrl: process.env.X402_FACILITATOR_URL ?? 'https://facilitator.x402.org',
+    x402FacilitatorUrl: process.env.X402_FACILITATOR_URL ?? 'https://facilitator.taiko.xyz',
     x402Network: process.env.X402_NETWORK ?? 'eip155:167000',
     x402PayTo: process.env.X402_PAY_TO ?? '0x0000000000000000000000000000000000000001',
     x402UsdcAssetAddress: process.env.X402_USDC_ASSET_ADDRESS ?? '0x0000000000000000000000000000000000000001',
     x402UsdcAssetDecimals: parseNumber(process.env.X402_USDC_ASSET_DECIMALS, 6, 'X402_USDC_ASSET_DECIMALS'),
+    x402UsdcDomainName: process.env.X402_USDC_DOMAIN_NAME ?? 'USD Coin',
+    x402UsdcDomainVersion: process.env.X402_USDC_DOMAIN_VERSION ?? '2',
     x402BasePriceUsd: parseNumber(process.env.X402_BASE_PRICE_USD, 0.001, 'X402_BASE_PRICE_USD'),
     x402PricePerMbUsd: parseNumber(process.env.X402_PRICE_PER_MB_USD, 0.001, 'X402_PRICE_PER_MB_USD'),
     x402MaxPriceUsd: parseNumber(process.env.X402_MAX_PRICE_USD, 0.01, 'X402_MAX_PRICE_USD')

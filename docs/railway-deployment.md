@@ -44,7 +44,7 @@ Set these in Railway Variables.
 | `TRUST_PROXY` | `true` | Railway terminates edge traffic before your service. |
 | `WALLET_AUTH_TOKEN_SECRET` | long random secret | Required for owner `Authorization: Bearer` flows. |
 | `X402_ENABLED` | `true` | Required for production startup checks. |
-| `X402_FACILITATOR_URL` | `https://facilitator.x402.org` | x402 facilitator endpoint. |
+| `X402_FACILITATOR_URL` | `https://facilitator.taiko.xyz` | Taiko x402 facilitator endpoint. |
 | `X402_NETWORK` | `eip155:167000` | Taiko Alethia. |
 | `X402_PAY_TO` | `0x...` treasury wallet | Must be a real address (no placeholders). |
 | `X402_USDC_ASSET_ADDRESS` | `0x...` Taiko USDC | Must be a real token address (no placeholders). |
