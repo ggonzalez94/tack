@@ -27,5 +27,8 @@ Thumbs.db
 *.swp
 *.swo
 
+# Backups
+backups/
+
 # Logs
 *.log

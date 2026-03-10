@@ -58,9 +58,12 @@ Set these in Railway Variables.
 - Keep SQLite at `/app/data/tack.db` on Railway volume.
 - Run API with a single replica to avoid SQLite file locking/consistency issues.
 - Keep Kubo data on a dedicated volume (`/data/ipfs`) so pins survive redeploys.
-- Snapshot backup before risky changes:
-  - copy `/app/data/tack.db`
-  - export Kubo repo snapshot from `/data/ipfs`
+- Back up SQLite before deploys:
+  ```bash
+  # From a Railway shell or locally with the volume mounted:
+  ./scripts/backup-sqlite.sh /app/data/tack.db /app/backups
+  ```
+- Export Kubo repo snapshot from `/data/ipfs` before risky changes.
 
 ## 4) Health Checks and Runtime Validation
 
@@ -98,3 +101,22 @@ When a release causes issues:
 8. End-to-end smoke passes (`pnpm smoke:x402`) against Railway URL.
 9. Manual pin/list/get/delete flow works with paid wallet identity.
 10. Rollback owner and backup location documented before launch.
+
+## 7) Production Limitations and Upgrade Path
+
+Current known limitations of this Railway deployment:
+
+| Limitation | Impact | Trigger to upgrade |
+| --- | --- | --- |
+| **SQLite single-writer** | API cannot scale beyond 1 replica | Write contention under load (a good problem) |
+| **Railway volumes are single-AZ** | No automatic recovery if the volume is lost | When uptime SLA is required |
+| **Kubo on Railway has ephemeral networking** | Peer table and DHT presence reset on every deploy; poor P2P discoverability | Kubo health check failures post-deploy, or content retrieval latency degrades |
+| **No automated backups** | Manual `scripts/backup-sqlite.sh` before deploys; Kubo volume has no snapshot automation | When data loss risk becomes unacceptable |
+| **Single IPFS node, no replication** | Pinned content lives on one Kubo instance | When data durability matters to users |
+
+Planned upgrade path (build when needed, not before):
+
+1. **SQLite -> Postgres**: Swap `PinRepository` to use `pg`. Unlocks horizontal API scaling.
+2. **Kubo on Railway -> Kubo on VPS** (Hetzner/Vultr): Stable networking, cheaper storage, proper DHT participation. Connect via WireGuard or restrict Kubo RPC to Railway egress IPs.
+3. **Single node -> Pinata/web3.storage replication**: Pin locally for speed, replicate to a commercial provider for durability. The `PIN_REPLICA_IPFS_API_URLS` mechanism covers additional self-hosted nodes; third-party pinning services need a Pinning Service API adapter.
+4. **Single region -> multi-region**: Requires Postgres (or CockroachDB), multiple API replicas, and geo-distributed Kubo nodes or a CDN in front of the gateway.
