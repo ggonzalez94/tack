@@ -58,14 +58,19 @@ Set these in Railway Variables.
 - Keep SQLite at `/app/data/tack.db` on Railway volume.
 - Run API with a single replica to avoid SQLite file locking/consistency issues.
 - Keep Kubo data on a dedicated volume (`/data/ipfs`) so pins survive redeploys.
-- Back up SQLite before deploys:
-  ```bash
-  # From a Railway shell or locally with the volume mounted:
-  ./scripts/backup-sqlite.sh /app/data/tack.db /app/backups
-  ```
 - Export Kubo repo snapshot from `/data/ipfs` before risky changes.
 
-## 4) Health Checks and Runtime Validation
+## 4) Backups
+
+Back up SQLite before deploys:
+
+```bash
+./scripts/backup-db.sh /app/data/tack.db.bak
+```
+
+`DATABASE_PATH` can be overridden for local backups; otherwise it defaults to `./data/tack.db`.
+
+## 5) Health Checks and Runtime Validation
 
 - Railway health check uses `GET /health`.
 - `200` means API is up and Kubo RPC is reachable.
@@ -79,7 +84,7 @@ Post-deploy checks:
 
 Use the full smoke runbook: [deployment-smoke.md](./deployment-smoke.md).
 
-## 5) Rollback Notes
+## 6) Rollback Notes
 
 When a release causes issues:
 
@@ -89,7 +94,7 @@ When a release causes issues:
 4. If a data migration or write-path bug corrupted SQLite, restore `tack.db` from backup snapshot.
 5. If Kubo regresses, roll back `tack-ipfs` service separately.
 
-## 6) Taiko + x402 Go-Live Checklist
+## 7) Taiko + x402 Go-Live Checklist
 
 1. API and Kubo services both healthy in Railway.
 2. API and Kubo persistent volumes attached and non-empty after a redeploy.
@@ -102,7 +107,7 @@ When a release causes issues:
 9. Manual pin/list/get/delete flow works with paid wallet identity.
 10. Rollback owner and backup location documented before launch.
 
-## 7) Production Limitations and Upgrade Path
+## 8) Production Limitations & Upgrade Path
 
 Current known limitations of this Railway deployment:
 
@@ -111,7 +116,7 @@ Current known limitations of this Railway deployment:
 | **SQLite single-writer** | API cannot scale beyond 1 replica | Write contention under load (a good problem) |
 | **Railway volumes are single-AZ** | No automatic recovery if the volume is lost | When uptime SLA is required |
 | **Kubo on Railway has ephemeral networking** | Peer table and DHT presence reset on every deploy; poor P2P discoverability | Kubo health check failures post-deploy, or content retrieval latency degrades |
-| **No automated backups** | Manual `scripts/backup-sqlite.sh` before deploys; Kubo volume has no snapshot automation | When data loss risk becomes unacceptable |
+| **No automated backups** | Manual `scripts/backup-db.sh` before deploys; Kubo volume has no snapshot automation | When data loss risk becomes unacceptable |
 | **Single IPFS node, no replication** | Pinned content lives on one Kubo instance | When data durability matters to users |
 
 Planned upgrade path (build when needed, not before):
