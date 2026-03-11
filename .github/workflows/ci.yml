@@ -15,15 +15,9 @@ concurrency:
 
 jobs:
   verify:
-    name: verify (node ${{ matrix.node-version }})
+    name: verify
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version:
-          - 20
-          - 22
 
     steps:
       - name: Checkout
@@ -37,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
