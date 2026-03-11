@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { serve } from '@hono/node-server';
 import { getConfig } from './config';
 import { createDb } from './db';
@@ -10,7 +12,20 @@ import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
 
+function getAppVersion(): string {
+  try {
+    const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
+      version?: string;
+    };
+
+    return packageJson.version?.trim() || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 const config = getConfig();
+const appVersion = getAppVersion();
 const db = createDb(config.dbPath);
 const repository = new PinRepository(db);
 const ipfsClient = new IpfsRpcClient(config.ipfsApiUrl, {
@@ -73,7 +88,7 @@ const app = createApp({
   agentCard: {
     name: 'Tack',
     description: 'Pin to IPFS, pay with your wallet. No account needed.',
-    version: '0.1.0',
+    version: appVersion,
     x402Enabled: config.x402Enabled,
     x402Network: config.x402Network,
     x402UsdcAssetAddress: config.x402UsdcAssetAddress,

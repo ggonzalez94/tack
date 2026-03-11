@@ -5,12 +5,14 @@
   "description": "Pin to IPFS, pay with your wallet. No account needed.",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint . --ext .ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "release:notes": "node scripts/extract-changelog-section.mjs",
     "smoke:x402": "tsx src/scripts/x402-smoke.ts"
   },
   "dependencies": {
