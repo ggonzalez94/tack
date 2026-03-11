@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { x402Client } from '@x402/core/client';
 import { x402HTTPClient } from '@x402/core/http';
 import { toClientEvmSigner } from '@x402/evm';
@@ -11,13 +14,28 @@ interface SmokeConfig {
   chainId: number;
   expectedNetwork: `eip155:${number}`;
   payerPrivateKey: Hex;
-  cid: string;
+  cid?: string;
   requestTimeoutMs: number;
+}
+
+interface UploadResponse {
+  cid: string;
 }
 
 interface PinStatusResponse {
   requestid: string;
   status: string;
+}
+
+interface PaidRequestResult {
+  acceptedRequirement: {
+    network: string;
+    amount: string;
+    asset: string;
+    payTo: string;
+  };
+  paymentSignatureHeaders: Record<string, string>;
+  response: Response;
 }
 
 function requiredEnv(name: string): string {
@@ -77,6 +95,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 
 function parseConfig(): SmokeConfig {
   const chainId = parsePositiveNumber('SMOKE_CHAIN_ID', process.env.SMOKE_CHAIN_ID, 167000);
+  const cid = process.env.SMOKE_CID?.trim();
 
   return {
     apiBaseUrl: normalizeBaseUrl(process.env.SMOKE_API_BASE_URL?.trim() ?? 'http://localhost:3000'),
@@ -84,8 +103,50 @@ function parseConfig(): SmokeConfig {
     chainId,
     expectedNetwork: `eip155:${chainId}`,
     payerPrivateKey: normalizeHexPrivateKey(requiredEnv('SMOKE_PAYER_PRIVATE_KEY')),
-    cid: process.env.SMOKE_CID?.trim() || 'bafkreiabfiu4ij6y7h5xj4yx4f2x7v2m2w6w63s3u5xyd4uxw5k2j7f7de',
+    cid: cid && cid.length > 0 ? cid : undefined,
     requestTimeoutMs: parsePositiveNumber('SMOKE_REQUEST_TIMEOUT_MS', process.env.SMOKE_REQUEST_TIMEOUT_MS, 45000)
+  };
+}
+
+async function payRequest(
+  paymentClient: x402HTTPClient,
+  url: string,
+  initFactory: () => RequestInit,
+  timeoutMs: number
+): Promise<PaidRequestResult> {
+  const unpaidResponse = await fetchWithTimeout(url, initFactory(), timeoutMs);
+  const unpaidBodyText = await unpaidResponse.text();
+  if (unpaidResponse.status !== 402) {
+    throw new Error(`Expected 402 from unpaid ${url}, got ${unpaidResponse.status}. Body: ${unpaidBodyText}`);
+  }
+
+  const paymentRequired = paymentClient.getPaymentRequiredResponse((name) => unpaidResponse.headers.get(name));
+  const acceptedRequirement = paymentRequired.accepts[0];
+
+  if (!acceptedRequirement) {
+    throw new Error(`Payment requirements were empty for ${url}`);
+  }
+
+  const paymentPayload = await paymentClient.createPaymentPayload(paymentRequired);
+  const paymentSignatureHeaders = paymentClient.encodePaymentSignatureHeader(paymentPayload);
+  const requestInit = initFactory();
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      ...requestInit,
+      headers: {
+        ...(requestInit.headers ?? {}),
+        ...paymentSignatureHeaders
+      }
+    },
+    timeoutMs
+  );
+
+  return {
+    acceptedRequirement,
+    paymentSignatureHeaders,
+    response
   };
 }
 
@@ -118,77 +179,147 @@ async function run(): Promise<void> {
   );
 
   const smokeRunId = `x402-smoke-${Date.now()}`;
+  const pinsUrl = `${config.apiBaseUrl}/pins`;
+  const uploadUrl = `${config.apiBaseUrl}/upload`;
+
+  let cid = config.cid;
+  let uploadSummary: {
+    cid: string;
+    filename: string;
+    bytes: number;
+    transaction: string;
+  } | null = null;
+
+  if (!cid) {
+    const tempDir = mkdtempSync(join(tmpdir(), 'tack-x402-smoke-'));
+    const filename = `${smokeRunId}.txt`;
+    const filePath = join(tempDir, filename);
+    const fileContents = `Tack x402 smoke upload\nwallet=${account.address}\ntime=${new Date().toISOString()}\n`;
+    writeFileSync(filePath, fileContents, 'utf8');
+    const fileBytes = readFileSync(filePath);
+
+    try {
+      const uploadResult = await payRequest(
+        paymentClient,
+        uploadUrl,
+        () => {
+          const formData = new FormData();
+          formData.append('file', new Blob([fileBytes], { type: 'text/plain' }), filename);
+
+          return {
+            method: 'POST',
+            body: formData
+          };
+        },
+        config.requestTimeoutMs
+      );
+
+      if (uploadResult.acceptedRequirement.network !== config.expectedNetwork) {
+        throw new Error(
+          `Expected upload payment network ${config.expectedNetwork} but got ${uploadResult.acceptedRequirement.network}`
+        );
+      }
+
+      const uploadBodyText = await uploadResult.response.text();
+      if (uploadResult.response.status !== 201) {
+        throw new Error(`Expected 201 from paid POST /upload, got ${uploadResult.response.status}. Body: ${uploadBodyText}`);
+      }
+
+      let uploadBody: UploadResponse;
+      try {
+        uploadBody = JSON.parse(uploadBodyText) as UploadResponse;
+      } catch {
+        throw new Error(`Expected JSON upload response but got: ${uploadBodyText}`);
+      }
+
+      if (!uploadBody.cid) {
+        throw new Error(`Upload response missing cid: ${uploadBodyText}`);
+      }
+
+      const uploadSettlement = paymentClient.getPaymentSettleResponse((name) => uploadResult.response.headers.get(name));
+      if (!uploadSettlement.success || !uploadSettlement.transaction?.startsWith('0x')) {
+        throw new Error(`Upload settlement failed: ${JSON.stringify(uploadSettlement)}`);
+      }
+
+      cid = uploadBody.cid;
+      uploadSummary = {
+        cid,
+        filename,
+        bytes: fileBytes.byteLength,
+        transaction: uploadSettlement.transaction
+      };
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
   const pinRequestBody = {
-    cid: config.cid,
+    cid,
     name: `${smokeRunId}.txt`,
     meta: {
       smokeRunId
     }
   };
 
-  const pinsUrl = `${config.apiBaseUrl}/pins`;
-  const unpaidResponse = await fetchWithTimeout(
+  const pinResult = await payRequest(
+    paymentClient,
     pinsUrl,
-    {
+    () => ({
       method: 'POST',
       headers: {
         'content-type': 'application/json'
       },
       body: JSON.stringify(pinRequestBody)
-    },
+    }),
     config.requestTimeoutMs
   );
 
-  const unpaidBodyText = await unpaidResponse.text();
-  if (unpaidResponse.status !== 402) {
-    throw new Error(`Expected 402 from unpaid POST /pins, got ${unpaidResponse.status}. Body: ${unpaidBodyText}`);
-  }
-
-  const paymentRequired = paymentClient.getPaymentRequiredResponse((name) => unpaidResponse.headers.get(name));
-  const acceptedRequirement = paymentRequired.accepts[0];
-
-  if (!acceptedRequirement) {
-    throw new Error('Payment requirements were empty');
-  }
-
-  if (acceptedRequirement.network !== config.expectedNetwork) {
+  if (pinResult.acceptedRequirement.network !== config.expectedNetwork) {
     throw new Error(
-      `Expected payment network ${config.expectedNetwork} but got ${acceptedRequirement.network}`
+      `Expected pin payment network ${config.expectedNetwork} but got ${pinResult.acceptedRequirement.network}`
     );
   }
 
-  const paymentPayload = await paymentClient.createPaymentPayload(paymentRequired);
-
-  const paidResponse = await fetchWithTimeout(
-    pinsUrl,
-    {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...paymentClient.encodePaymentSignatureHeader(paymentPayload)
-      },
-      body: JSON.stringify(pinRequestBody)
-    },
-    config.requestTimeoutMs
-  );
-
-  const paidBodyText = await paidResponse.text();
-  if (paidResponse.status !== 202) {
-    throw new Error(`Expected 202 from paid POST /pins, got ${paidResponse.status}. Body: ${paidBodyText}`);
+  const paidBodyText = await pinResult.response.text();
+  if (pinResult.response.status !== 202) {
+    throw new Error(`Expected 202 from paid POST /pins, got ${pinResult.response.status}. Body: ${paidBodyText}`);
   }
 
-  let pinStatus: PinStatusResponse;
+  let pinResponse: PinStatusResponse;
   try {
-    pinStatus = JSON.parse(paidBodyText) as PinStatusResponse;
+    pinResponse = JSON.parse(paidBodyText) as PinStatusResponse;
   } catch {
     throw new Error(`Expected JSON pin response but got: ${paidBodyText}`);
   }
 
-  if (!pinStatus.requestid) {
+  if (!pinResponse.requestid) {
     throw new Error(`Paid pin response missing requestid: ${paidBodyText}`);
   }
 
-  const settlement = paymentClient.getPaymentSettleResponse((name) => paidResponse.headers.get(name));
+  const pinStatusResponse = await fetchWithTimeout(
+    `${pinsUrl}/${pinResponse.requestid}`,
+    {
+      headers: pinResult.paymentSignatureHeaders
+    },
+    config.requestTimeoutMs
+  );
+  const pinStatusBodyText = await pinStatusResponse.text();
+  if (pinStatusResponse.status !== 200) {
+    throw new Error(`Expected 200 from GET /pins/:requestid, got ${pinStatusResponse.status}. Body: ${pinStatusBodyText}`);
+  }
+
+  let pinStatus: PinStatusResponse;
+  try {
+    pinStatus = JSON.parse(pinStatusBodyText) as PinStatusResponse;
+  } catch {
+    throw new Error(`Expected JSON pin status response but got: ${pinStatusBodyText}`);
+  }
+
+  if (pinStatus.status !== 'pinned') {
+    throw new Error(`Expected pin status to be pinned, got ${pinStatus.status}. Body: ${pinStatusBodyText}`);
+  }
+
+  const settlement = paymentClient.getPaymentSettleResponse((name) => pinResult.response.headers.get(name));
   if (!settlement.success) {
     throw new Error(`Settlement did not succeed: ${JSON.stringify(settlement)}`);
   }
@@ -210,24 +341,49 @@ async function run(): Promise<void> {
     throw new Error(`Settlement missing transaction hash: ${JSON.stringify(settlement)}`);
   }
 
+  const retrievalResponse = await fetchWithTimeout(
+    `${config.apiBaseUrl}/ipfs/${cid}`,
+    {
+      method: 'GET'
+    },
+    config.requestTimeoutMs
+  );
+  const retrievalBody = await retrievalResponse.arrayBuffer();
+  if (retrievalResponse.status !== 200) {
+    throw new Error(`Expected 200 from GET /ipfs/:cid, got ${retrievalResponse.status}`);
+  }
+  if (retrievalBody.byteLength === 0) {
+    throw new Error('Retrieved content was unexpectedly empty');
+  }
+
   console.log(
     JSON.stringify(
       {
         status: 'ok',
-        flow: '402 -> pay -> retry',
-        requestId: pinStatus.requestid,
-        pinStatus: pinStatus.status,
-        paymentRequired: {
-          network: acceptedRequirement.network,
-          amount: acceptedRequirement.amount,
-          asset: acceptedRequirement.asset,
-          payTo: acceptedRequirement.payTo
+        flow: uploadSummary ? 'upload -> pin -> retrieve' : 'pin existing cid -> retrieve',
+        upload: uploadSummary,
+        pin: {
+          requestId: pinStatus.requestid,
+          cid,
+          status: pinStatus.status,
+          paymentRequired: {
+            network: pinResult.acceptedRequirement.network,
+            amount: pinResult.acceptedRequirement.amount,
+            asset: pinResult.acceptedRequirement.asset,
+            payTo: pinResult.acceptedRequirement.payTo
+          },
+          settlement: {
+            transaction: settlement.transaction,
+            network: settlement.network,
+            payer: settlement.payer,
+            success: settlement.success
+          }
         },
-        settlement: {
-          transaction: settlement.transaction,
-          network: settlement.network,
-          payer: settlement.payer,
-          success: settlement.success
+        retrieval: {
+          cid,
+          bytes: retrievalBody.byteLength,
+          etag: retrievalResponse.headers.get('etag'),
+          contentType: retrievalResponse.headers.get('content-type')
         }
       },
       null,
