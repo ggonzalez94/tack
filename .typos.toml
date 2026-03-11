@@ -1,0 +1,11 @@
+[default.extend-words]
+alethia = "alethia"
+requestid = "requestid"
+
+[files]
+extend-exclude = [
+  "data",
+  "dist",
+  "node_modules",
+  "pnpm-lock.yaml",
+]
