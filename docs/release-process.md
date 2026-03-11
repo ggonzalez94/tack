@@ -19,7 +19,7 @@ Repository variables:
 - `X402_SMOKE_CID` (optional)
 
 Repository secrets:
-- `RAILWAY_TOKEN`
+- `RAILWAY_API_TOKEN`
 - `X402_SMOKE_PAYER_PRIVATE_KEY` (optional, enables the paid post-deploy smoke test)
 
 ## Cut a release
