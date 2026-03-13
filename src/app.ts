@@ -9,6 +9,7 @@ import {
   UpstreamServiceError,
   ValidationError
 } from './lib/errors';
+import { getExternalOrigin } from './lib/request-url';
 import { toPinStatusResponse, type PinningService } from './services/pinning-service';
 import type { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
@@ -408,8 +409,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   });
 
   app.get('/.well-known/agent.json', (c) => {
-    const baseUrl = new URL(c.req.url);
-    const origin = `${baseUrl.protocol}//${baseUrl.host}`;
+    const origin = getExternalOrigin(c.req.url, c.req.raw.headers, trustProxy);
     const agent = services.agentCard;
 
     return c.json({

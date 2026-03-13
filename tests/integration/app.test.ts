@@ -334,14 +334,36 @@ describe('API integration', () => {
     expect(response.status).toBe(200);
 
     const agentCard = (await response.json()) as {
+      endpoint: string;
       protocol: string;
       capabilities: { pinningApi: { endpoints: string[] } };
       pricing: { retrieval: { metadataField: string } };
     };
 
     expect(agentCard.protocol).toBe('a2a');
+    expect(agentCard.endpoint).toBe('http://localhost');
     expect(agentCard.capabilities.pinningApi.endpoints).toContain('/pins');
     expect(agentCard.pricing.retrieval.metadataField).toBe('meta.retrievalPrice');
+  });
+
+  it('uses forwarded host and proto in the AgentCard when trustProxy is enabled', async () => {
+    const trustedProxyApp = createApp({
+      pinningService: service,
+      trustProxy: true
+    });
+
+    const response = await trustedProxyApp.request(
+      new Request('http://localhost/.well-known/agent.json', {
+        headers: {
+          'x-forwarded-host': 'tack-api-production.up.railway.app',
+          'x-forwarded-proto': 'https'
+        }
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const agentCard = (await response.json()) as { endpoint: string };
+    expect(agentCard.endpoint).toBe('https://tack-api-production.up.railway.app');
   });
 
   it('rejects uploads over configured upload size limit', async () => {

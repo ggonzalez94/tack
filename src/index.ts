@@ -70,7 +70,8 @@ const paymentMiddleware = config.x402Enabled
           payTo: policy.payTo,
           priceUsd: policy.priceUsd
         };
-      }
+      },
+      trustProxy: config.trustProxy
     })
   : undefined;
 

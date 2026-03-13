@@ -1,17 +1,18 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { paymentMiddlewareFromHTTPServer } from '@x402/hono';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { decodePaymentSignatureHeader } from '@x402/core/http';
 import {
   HTTPFacilitatorClient,
+  type HTTPAdapter,
   type FacilitatorClient,
   type HTTPRequestContext,
   type RoutesConfig,
   x402HTTPResourceServer,
   x402ResourceServer
 } from '@x402/core/server';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import type { PaymentPayload } from '@x402/core/types';
+import { getExternalRequestUrl } from '../lib/request-url';
 
 interface AssetAmountPrice {
   amount: string;
@@ -49,6 +50,146 @@ export type RetrievalPaymentResolver = (
 
 export interface X402PaymentMiddlewareOptions {
   resolveRetrievalPayment?: RetrievalPaymentResolver;
+  trustProxy?: boolean;
+}
+
+class ProxyAwareHonoAdapter implements HTTPAdapter {
+  constructor(
+    private readonly c: Context,
+    private readonly trustProxy: boolean
+  ) {}
+
+  getHeader(name: string): string | undefined {
+    return this.c.req.header(name);
+  }
+
+  getMethod(): string {
+    return this.c.req.method;
+  }
+
+  getPath(): string {
+    return this.c.req.path;
+  }
+
+  getUrl(): string {
+    return getExternalRequestUrl(this.c.req.url, this.c.req.raw.headers, this.trustProxy).toString();
+  }
+
+  getAcceptHeader(): string {
+    return this.c.req.header('Accept') || '';
+  }
+
+  getUserAgent(): string {
+    return this.c.req.header('User-Agent') || '';
+  }
+
+  getQueryParams(): Record<string, string | string[]> {
+    const query = this.c.req.query();
+    const result: Record<string, string | string[]> = {};
+
+    for (const [key, value] of Object.entries(query)) {
+      result[key] = value;
+    }
+
+    return result;
+  }
+
+  getQueryParam(name: string): string | string[] | undefined {
+    return this.c.req.query(name);
+  }
+
+  async getBody(): Promise<unknown> {
+    try {
+      return await this.c.req.json();
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function createProxyAwarePaymentMiddleware(httpServer: x402HTTPResourceServer, trustProxy: boolean): MiddlewareHandler {
+  let initPromise: Promise<void> | null = httpServer.initialize();
+
+  return async (c, next) => {
+    const adapter = new ProxyAwareHonoAdapter(c, trustProxy);
+    const context: HTTPRequestContext = {
+      adapter,
+      path: c.req.path,
+      method: c.req.method,
+      paymentHeader: adapter.getHeader('payment-signature') || adapter.getHeader('x-payment')
+    };
+
+    if (!httpServer.requiresPayment(context)) {
+      return next();
+    }
+
+    if (initPromise) {
+      await initPromise;
+      initPromise = null;
+    }
+
+    const result = await httpServer.processHTTPRequest(context);
+
+    switch (result.type) {
+      case 'no-payment-required':
+        return next();
+      case 'payment-error': {
+        const { response } = result;
+        Object.entries(response.headers).forEach(([key, value]) => {
+          c.header(key, value);
+        });
+
+        if (response.isHtml) {
+          return c.html(response.body as string, response.status as 402);
+        }
+
+        return c.json(response.body || {}, response.status as 402);
+      }
+      case 'payment-verified': {
+        const { paymentPayload, paymentRequirements, declaredExtensions } = result;
+
+        await next();
+
+        let res = c.res;
+        if (res.status >= 400) {
+          return;
+        }
+
+        const responseBody = Buffer.from(await res.clone().arrayBuffer());
+        c.res = undefined;
+
+        try {
+          const settleResult = await httpServer.processSettlement(
+            paymentPayload,
+            paymentRequirements,
+            declaredExtensions,
+            { request: context, responseBody }
+          );
+
+          if (!settleResult.success) {
+            const { response } = settleResult;
+            const body = response.isHtml
+              ? (typeof response.body === 'string' ? response.body : '')
+              : JSON.stringify(response.body ?? {});
+
+            res = new Response(body, {
+              status: response.status,
+              headers: response.headers
+            });
+          } else {
+            Object.entries(settleResult.headers).forEach(([key, value]) => {
+              res.headers.set(key, value);
+            });
+          }
+        } catch {
+          res = c.json({}, 402);
+        }
+
+        c.res = res;
+        return;
+      }
+    }
+  };
 }
 
 function parsePositiveInteger(raw: string | undefined): number | undefined {
@@ -379,6 +520,7 @@ export function createX402PaymentMiddleware(
   options?: X402PaymentMiddlewareOptions
 ): MiddlewareHandler {
   const retrievalResolver = options?.resolveRetrievalPayment;
+  const trustProxy = options?.trustProxy ?? false;
   const facilitator = facilitatorClient ?? new HTTPFacilitatorClient({ url: config.facilitatorUrl });
   const resourceServer = new x402ResourceServer(facilitator).register(config.network, new ExactEvmScheme());
   const exactTransferExtra = {
@@ -460,5 +602,5 @@ export function createX402PaymentMiddleware(
     });
   }
 
-  return paymentMiddlewareFromHTTPServer(httpServer);
+  return createProxyAwarePaymentMiddleware(httpServer, trustProxy);
 }

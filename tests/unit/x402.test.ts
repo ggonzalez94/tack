@@ -168,6 +168,7 @@ describe('x402 middleware', () => {
     expect(paymentRequiredHeader).toBeTruthy();
 
     const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader!);
+    expect(paymentRequired.resource?.url).toBe('http://localhost/pins');
     const accepted = paymentRequired.accepts[0];
     const paymentPayload: PaymentPayload = {
       x402Version: paymentRequired.x402Version,
@@ -203,6 +204,31 @@ describe('x402 middleware', () => {
     const settlement = decodePaymentResponseHeader(paymentResponseHeader!);
     expect(settlement.success).toBe(true);
     expect(settlement.network).toBe(testConfig.network);
+  });
+
+  it('uses forwarded host and proto in payment requirements when trustProxy is enabled', async () => {
+    const app = new Hono();
+    app.use(createX402PaymentMiddleware(testConfig, mockFacilitator, { trustProxy: true }));
+    app.post('/pins', (c) => c.json({ ok: true }));
+
+    const unpaid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-host': 'tack-api-production.up.railway.app',
+          'x-forwarded-proto': 'https'
+        },
+        body: JSON.stringify({ cid: 'bafy-test' })
+      })
+    );
+
+    expect(unpaid.status).toBe(402);
+    const paymentRequiredHeader = unpaid.headers.get('payment-required');
+    expect(paymentRequiredHeader).toBeTruthy();
+
+    const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader!);
+    expect(paymentRequired.resource?.url).toBe('https://tack-api-production.up.railway.app/pins');
   });
 
   it('enforces optional retrieval paywall with dynamic owner payout', async () => {
