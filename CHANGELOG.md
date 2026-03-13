@@ -11,6 +11,17 @@ Format:
 
 - None yet.
 
+## [v0.1.1] - 2026-03-13
+
+### Changed
+- Tack now normalizes public request URLs at the app boundary so AgentCard metadata and x402 payment metadata use the correct public HTTPS origin behind Railway and other trusted proxies.
+
+### Fixed
+- Release smoke validation now covers the paid pinning flow more accurately before deployment promotion.
+
+### Docs
+- Added `PUBLIC_BASE_URL` guidance for deterministic public URL metadata in Railway deployments.
+
 ## [v0.1.0] - 2026-03-10
 
 ### Added
@@ -26,5 +37,6 @@ Format:
 ### Docs
 - Added Railway deployment and Taiko x402 smoke runbooks covering volumes, backups, rollback, and go-live validation.
 
-[Unreleased]: https://github.com/ggonzalez94/tack/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ggonzalez94/tack/compare/v0.1.1...HEAD
+[v0.1.1]: https://github.com/ggonzalez94/tack/releases/tag/v0.1.1
 [v0.1.0]: https://github.com/ggonzalez94/tack/releases/tag/v0.1.0
