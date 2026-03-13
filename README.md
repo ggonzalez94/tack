@@ -28,6 +28,10 @@ curl -X POST https://tack-api-production.up.railway.app/pins \
   -H 'content-type: application/json' \
   -H 'payment-signature: <x402-payment-signature>' \
   -d '{"cid":"bafybeigdyrzt...","name":"example.txt"}'
+
+# Save the owner token returned in the response headers and use it on owner routes
+curl https://tack-api-production.up.railway.app/pins/<requestid> \
+  -H 'Authorization: Bearer <x-wallet-auth-token>'
 ```
 
 ## API
@@ -48,7 +52,7 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 
 **Pricing**: $0.001 base + $0.001/MB per pin operation, settled in USDC on Taiko Alethia via x402.
 
-**Auth model**: Paid endpoints use `payment-signature` (x402). Owner endpoints (list, get, replace, delete) require wallet identity from the owning wallet, provided either by `payment-signature` or, when configured, `Authorization: Bearer <token>`. The wallet that pays owns the pin.
+**Auth model**: Paid endpoints use `payment-signature` (x402). Successful paid responses return a short-lived `x-wallet-auth-token` response header. Owner endpoints (list, get, replace, delete) require that bearer token. The wallet that pays owns the pin.
 
 ## For AI Agents
 

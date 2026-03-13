@@ -8,13 +8,15 @@ export interface AppConfig {
   delegateUrl: string;
   publicBaseUrl?: string;
   trustProxy: boolean;
-  walletAuthTokenSecret?: string;
+  walletAuthTokenSecret: string;
+  walletAuthTokenIssuer: string;
+  walletAuthTokenAudience: string;
+  walletAuthTokenTtlSeconds: number;
   uploadMaxSizeBytes: number;
   gatewayMaxContentSizeBytes: number;
   gatewayCacheMaxSizeBytes: number;
   gatewayCacheControlMaxAgeSeconds: number;
   rateLimitRequestsPerMinute: number;
-  x402Enabled: boolean;
   x402FacilitatorUrl: string;
   x402Network: string;
   x402PayTo: string;
@@ -30,6 +32,10 @@ export interface AppConfig {
 const PLACEHOLDER_EVM_ADDRESSES = new Set([
   '0x0000000000000000000000000000000000000000',
   '0x0000000000000000000000000000000000000001'
+]);
+const PLACEHOLDER_WALLET_AUTH_SECRETS = new Set([
+  'change-me',
+  'changeme'
 ]);
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
@@ -117,8 +123,8 @@ function validateProductionConfig(config: AppConfig): void {
     return;
   }
 
-  if (!config.x402Enabled) {
-    throw new Error('Invalid production configuration: X402_ENABLED must be true');
+  if (config.walletAuthTokenSecret.trim().length < 32 || PLACEHOLDER_WALLET_AUTH_SECRETS.has(config.walletAuthTokenSecret.trim().toLowerCase())) {
+    throw new Error('Invalid production configuration: WALLET_AUTH_TOKEN_SECRET must be a strong random secret');
   }
 
   if (isPlaceholderEvmAddress(config.x402PayTo)) {
@@ -131,6 +137,11 @@ function validateProductionConfig(config: AppConfig): void {
 }
 
 export function getConfig(): AppConfig {
+  const walletAuthTokenSecret = process.env.WALLET_AUTH_TOKEN_SECRET?.trim();
+  if (!walletAuthTokenSecret) {
+    throw new Error('Missing required environment variable: WALLET_AUTH_TOKEN_SECRET');
+  }
+
   const config: AppConfig = {
     port: Number(process.env.PORT ?? 3000),
     ipfsApiUrl: process.env.IPFS_API_URL ?? 'http://ipfs:5001',
@@ -141,7 +152,14 @@ export function getConfig(): AppConfig {
     delegateUrl: process.env.DELEGATE_URL ?? 'http://localhost:8080/ipfs',
     publicBaseUrl: parsePublicBaseUrl(process.env.PUBLIC_BASE_URL),
     trustProxy: parseBoolean(process.env.TRUST_PROXY, false),
-    walletAuthTokenSecret: process.env.WALLET_AUTH_TOKEN_SECRET,
+    walletAuthTokenSecret,
+    walletAuthTokenIssuer: process.env.WALLET_AUTH_TOKEN_ISSUER ?? 'tack',
+    walletAuthTokenAudience: process.env.WALLET_AUTH_TOKEN_AUDIENCE ?? 'tack-owner-api',
+    walletAuthTokenTtlSeconds: parseNumber(
+      process.env.WALLET_AUTH_TOKEN_TTL_SECONDS,
+      900,
+      'WALLET_AUTH_TOKEN_TTL_SECONDS'
+    ),
     uploadMaxSizeBytes: parseNumber(process.env.UPLOAD_MAX_SIZE_BYTES, 100 * 1024 * 1024, 'UPLOAD_MAX_SIZE_BYTES'),
     gatewayMaxContentSizeBytes: parseNumber(process.env.GATEWAY_MAX_CONTENT_SIZE_BYTES, 50 * 1024 * 1024, 'GATEWAY_MAX_CONTENT_SIZE_BYTES'),
     gatewayCacheMaxSizeBytes: parseNumber(process.env.GATEWAY_CACHE_MAX_SIZE_BYTES, 100 * 1024 * 1024, 'GATEWAY_CACHE_MAX_SIZE_BYTES'),
@@ -155,7 +173,6 @@ export function getConfig(): AppConfig {
       120,
       'RATE_LIMIT_REQUESTS_PER_MINUTE'
     ),
-    x402Enabled: parseBoolean(process.env.X402_ENABLED, false),
     x402FacilitatorUrl: process.env.X402_FACILITATOR_URL ?? 'https://facilitator.taiko.xyz',
     x402Network: process.env.X402_NETWORK ?? 'eip155:167000',
     x402PayTo: process.env.X402_PAY_TO ?? '0x0000000000000000000000000000000000000001',
@@ -167,6 +184,10 @@ export function getConfig(): AppConfig {
     x402PricePerMbUsd: parseNumber(process.env.X402_PRICE_PER_MB_USD, 0.001, 'X402_PRICE_PER_MB_USD'),
     x402MaxPriceUsd: parseNumber(process.env.X402_MAX_PRICE_USD, 0.01, 'X402_MAX_PRICE_USD')
   };
+
+  if (!Number.isInteger(config.walletAuthTokenTtlSeconds) || config.walletAuthTokenTtlSeconds <= 0) {
+    throw new Error('WALLET_AUTH_TOKEN_TTL_SECONDS must be a positive integer');
+  }
 
   validateProductionConfig(config);
   return config;

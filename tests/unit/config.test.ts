@@ -18,21 +18,29 @@ describe('config validation', () => {
     process.env = { ...originalEnv };
   });
 
-  it('fails fast in production when x402 is disabled', () => {
+  it('requires WALLET_AUTH_TOKEN_SECRET', () => {
+    setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: ''
+    });
+
+    expect(() => getConfig()).toThrow('Missing required environment variable: WALLET_AUTH_TOKEN_SECRET');
+  });
+
+  it('fails fast in production when WALLET_AUTH_TOKEN_SECRET is weak', () => {
     setTestEnv({
       NODE_ENV: 'production',
-      X402_ENABLED: 'false',
+      WALLET_AUTH_TOKEN_SECRET: 'change-me',
       X402_PAY_TO: realPayTo,
       X402_USDC_ASSET_ADDRESS: realUsdc
     });
 
-    expect(() => getConfig()).toThrow('X402_ENABLED must be true');
+    expect(() => getConfig()).toThrow('WALLET_AUTH_TOKEN_SECRET must be a strong random secret');
   });
 
   it('fails fast in production when X402_PAY_TO is a placeholder', () => {
     setTestEnv({
       NODE_ENV: 'production',
-      X402_ENABLED: 'true',
+      WALLET_AUTH_TOKEN_SECRET: '0123456789abcdef0123456789abcdef',
       X402_PAY_TO: placeholderAddress,
       X402_USDC_ASSET_ADDRESS: realUsdc
     });
@@ -43,7 +51,7 @@ describe('config validation', () => {
   it('fails fast in production when X402_USDC_ASSET_ADDRESS is a placeholder', () => {
     setTestEnv({
       NODE_ENV: 'production',
-      X402_ENABLED: 'true',
+      WALLET_AUTH_TOKEN_SECRET: '0123456789abcdef0123456789abcdef',
       X402_PAY_TO: realPayTo,
       X402_USDC_ASSET_ADDRESS: placeholderAddress
     });
@@ -54,21 +62,24 @@ describe('config validation', () => {
   it('accepts explicit production x402 configuration', () => {
     setTestEnv({
       NODE_ENV: 'production',
-      X402_ENABLED: 'true',
+      WALLET_AUTH_TOKEN_SECRET: '0123456789abcdef0123456789abcdef',
       X402_NETWORK: 'eip155:167000',
       X402_PAY_TO: realPayTo,
       X402_USDC_ASSET_ADDRESS: realUsdc
     });
 
     const config = getConfig();
-    expect(config.x402Enabled).toBe(true);
     expect(config.x402Network).toBe('eip155:167000');
     expect(config.x402PayTo).toBe(realPayTo);
     expect(config.x402UsdcAssetAddress).toBe(realUsdc);
+    expect(config.walletAuthTokenAudience).toBe('tack-owner-api');
+    expect(config.walletAuthTokenIssuer).toBe('tack');
+    expect(config.walletAuthTokenTtlSeconds).toBe(900);
   });
 
   it('parses replica URL lists', () => {
     setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
       PIN_REPLICA_IPFS_API_URLS: 'http://ipfs-a:5001, http://ipfs-b:5001',
       PIN_REPLICA_DELEGATE_URLS: 'https://gw-a.example/ipfs,https://gw-b.example/ipfs'
     });
@@ -80,6 +91,7 @@ describe('config validation', () => {
 
   it('parses PUBLIC_BASE_URL as an origin', () => {
     setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
       PUBLIC_BASE_URL: 'https://api.tack.example/'
     });
 
@@ -89,6 +101,7 @@ describe('config validation', () => {
 
   it('fails when replica delegate URLs do not match replica API URL count', () => {
     setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
       PIN_REPLICA_IPFS_API_URLS: 'http://ipfs-a:5001,http://ipfs-b:5001',
       PIN_REPLICA_DELEGATE_URLS: 'https://gw-a.example/ipfs'
     });
@@ -100,9 +113,19 @@ describe('config validation', () => {
 
   it('rejects PUBLIC_BASE_URL values with paths', () => {
     setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
       PUBLIC_BASE_URL: 'https://api.tack.example/v1'
     });
 
     expect(() => getConfig()).toThrow('PUBLIC_BASE_URL must be an origin without path, query, or hash');
+  });
+
+  it('rejects non-positive wallet auth token ttl', () => {
+    setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
+      WALLET_AUTH_TOKEN_TTL_SECONDS: '0'
+    });
+
+    expect(() => getConfig()).toThrow('WALLET_AUTH_TOKEN_TTL_SECONDS must be a positive integer');
   });
 });

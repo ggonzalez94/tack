@@ -43,8 +43,10 @@ Set these in Railway Variables.
 | `DELEGATE_URL` | `https://<ipfs-gateway-domain>/ipfs` | Returned in pin delegates metadata. |
 | `PUBLIC_BASE_URL` | `https://<your-api-domain>` | Recommended. Used for AgentCard and x402 absolute resource URLs. |
 | `TRUST_PROXY` | `true` | Railway terminates edge traffic before your service. |
-| `WALLET_AUTH_TOKEN_SECRET` | long random secret | Optional. Set it if you want signed `Authorization: Bearer` flows for owner routes. |
-| `X402_ENABLED` | `true` | Required for production startup checks. |
+| `WALLET_AUTH_TOKEN_SECRET` | long random secret | Required. Used to mint and verify short-lived owner bearer tokens. |
+| `WALLET_AUTH_TOKEN_ISSUER` | `tack` | Optional. JWT issuer for owner bearer tokens. |
+| `WALLET_AUTH_TOKEN_AUDIENCE` | `tack-owner-api` | Optional. JWT audience for owner bearer tokens. |
+| `WALLET_AUTH_TOKEN_TTL_SECONDS` | `900` | Optional. Maximum owner token lifetime in seconds. |
 | `X402_FACILITATOR_URL` | `https://facilitator.taiko.xyz` | Taiko x402 facilitator endpoint. |
 | `X402_NETWORK` | `eip155:167000` | Taiko Alethia. |
 | `X402_PAY_TO` | `0x...` treasury wallet | Must be a real address (no placeholders). |
@@ -81,7 +83,7 @@ Post-deploy checks:
 
 1. `GET /health` returns `200`.
 2. `POST /pins` without payment returns `402`.
-3. Paid retry with `payment-signature` returns `202`.
+3. Paid retry with `payment-signature` returns `202` and includes `x-wallet-auth-token`.
 
 Use the full smoke runbook: [deployment-smoke.md](./deployment-smoke.md).
 
@@ -99,14 +101,14 @@ When a release causes issues:
 
 1. API and Kubo services both healthy in Railway.
 2. API and Kubo persistent volumes attached and non-empty after a redeploy.
-3. `X402_ENABLED=true` and `X402_NETWORK=eip155:167000`.
+3. `X402_NETWORK=eip155:167000`.
 4. `X402_PAY_TO` and `X402_USDC_ASSET_ADDRESS` are real Taiko Alethia addresses.
-5. `WALLET_AUTH_TOKEN_SECRET` is set to a strong random value if you want bearer-token access to owner routes.
+5. `WALLET_AUTH_TOKEN_SECRET` is set to a strong random value.
 6. `PUBLIC_BASE_URL` matches the public Railway HTTPS domain.
 7. `TRUST_PROXY=true` configured.
 8. `/health` stable at `200` over repeated checks.
 9. End-to-end smoke passes (`pnpm smoke:x402`) against Railway URL.
-10. Manual pin/list/get/delete flow works with paid wallet identity.
+10. Manual pin/list/get/delete flow works with the issued owner bearer token.
 11. Rollback owner and backup location documented before launch.
 
 ## 8) Production Limitations & Upgrade Path

@@ -8,17 +8,17 @@ The smoke flow validates the production-critical `POST /pins` payment path:
 
 1. Unpaid request returns `402 Payment Required` with `payment-required` header.
 2. Client settles payment via x402 facilitator.
-3. Retried request with `payment-signature` returns `202` and includes `payment-response`.
+3. Retried request with `payment-signature` returns `202`, includes `payment-response`, and issues an owner auth token.
 4. Settlement response is validated (`success=true`, expected network, transaction hash).
 
 ## Prerequisites
 
 - Live Tack deployment reachable via HTTPS.
 - Deployment configured with real Taiko x402 settings:
-  - `X402_ENABLED=true`
   - `X402_NETWORK=eip155:167000`
   - `X402_PAY_TO=<treasury wallet>`
   - `X402_USDC_ASSET_ADDRESS=<Taiko USDC contract>`
+  - `WALLET_AUTH_TOKEN_SECRET=<strong random secret>`
 - Smoke payer wallet private key with spendable Taiko USDC.
 - RPC endpoint for Taiko Alethia.
 

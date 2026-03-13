@@ -5,7 +5,15 @@ import type { FacilitatorClient } from '@x402/core/server';
 import type { PaymentPayload, PaymentRequirements } from '@x402/core/types';
 import { describe, expect, it } from 'vitest';
 import { createExternalRequestUrlMiddleware } from '../../src/lib/request-url';
-import { calculatePriceUsd, createX402PaymentMiddleware, resolveWalletFromHeaders, type X402PaymentConfig } from '../../src/services/x402';
+import {
+  calculatePriceUsd,
+  createWalletAuthToken,
+  createX402PaymentMiddleware,
+  extractPaidWalletFromHeaders,
+  resolveWalletFromHeaders,
+  type WalletAuthConfig,
+  type X402PaymentConfig
+} from '../../src/services/x402';
 
 const testConfig: X402PaymentConfig = {
   facilitatorUrl: 'http://localhost:9999',
@@ -13,24 +21,36 @@ const testConfig: X402PaymentConfig = {
   payTo: '0x1111111111111111111111111111111111111111',
   usdcAssetAddress: '0x2222222222222222222222222222222222222222',
   usdcAssetDecimals: 6,
+  usdcDomainName: 'USD Coin',
+  usdcDomainVersion: '2',
   basePriceUsd: 0.001,
   pricePerMbUsd: 0.001,
   maxPriceUsd: 0.01
 };
-const walletAuthSecret = 'unit-wallet-auth-secret';
+const walletAuthConfig: WalletAuthConfig = {
+  secret: '0123456789abcdef0123456789abcdef',
+  issuer: 'tack',
+  audience: 'tack-owner-api',
+  ttlSeconds: 900
+};
 
-function createWalletAuthToken(walletAddress: string): string {
+function createSignedWalletAuthToken(payloadPatch: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' }), 'utf8')
     .toString('base64url');
+  const issuedAt = Math.floor(Date.now() / 1000);
   const payload = Buffer.from(
     JSON.stringify({
-      sub: walletAddress,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 3600
+      sub: '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      iss: walletAuthConfig.issuer,
+      aud: walletAuthConfig.audience,
+      iat: issuedAt,
+      nbf: issuedAt,
+      exp: issuedAt + walletAuthConfig.ttlSeconds,
+      ...payloadPatch
     }),
     'utf8'
   ).toString('base64url');
-  const signature = createHmac('sha256', walletAuthSecret).update(`${header}.${payload}`).digest('base64url');
+  const signature = createHmac('sha256', walletAuthConfig.secret).update(`${header}.${payload}`).digest('base64url');
 
   return `${header}.${payload}.${signature}`;
 }
@@ -107,22 +127,16 @@ describe('x402 payment integration helpers', () => {
       'payment-signature': encodePaymentSignatureHeader(paymentPayload)
     });
 
-    const identity = resolveWalletFromHeaders(headers);
-    expect(identity.paidWallet).toBe('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-    expect(identity.authTokenWallet).toBeNull();
-    expect(identity.authError).toBeNull();
-    expect(identity.wallet).toBe('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(extractPaidWalletFromHeaders(headers)).toBe('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
   });
 
   it('extracts wallet identity from a signed bearer token', () => {
     const headers = new Headers({
-      authorization: `Bearer ${createWalletAuthToken('0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')}`
+      authorization: `Bearer ${createWalletAuthToken('0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', walletAuthConfig).token}`
     });
 
-    const identity = resolveWalletFromHeaders(headers, walletAuthSecret);
-    expect(identity.paidWallet).toBeNull();
+    const identity = resolveWalletFromHeaders(headers, walletAuthConfig);
     expect(identity.authError).toBeNull();
-    expect(identity.authTokenWallet).toBe('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     expect(identity.wallet).toBe('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
   });
 
@@ -131,9 +145,7 @@ describe('x402 payment integration helpers', () => {
       'x-wallet-address': '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     });
 
-    const identity = resolveWalletFromHeaders(headers, walletAuthSecret);
-    expect(identity.paidWallet).toBeNull();
-    expect(identity.authTokenWallet).toBeNull();
+    const identity = resolveWalletFromHeaders(headers, walletAuthConfig);
     expect(identity.authError).toBeNull();
     expect(identity.wallet).toBeNull();
   });
@@ -143,10 +155,19 @@ describe('x402 payment integration helpers', () => {
       authorization: 'Bearer malformed.token'
     });
 
-    const identity = resolveWalletFromHeaders(headers, walletAuthSecret);
+    const identity = resolveWalletFromHeaders(headers, walletAuthConfig);
     expect(identity.wallet).toBeNull();
-    expect(identity.authTokenWallet).toBeNull();
     expect(identity.authError).toBe('invalid wallet auth token');
+  });
+
+  it('rejects wallet auth tokens with an invalid audience', () => {
+    const headers = new Headers({
+      authorization: `Bearer ${createSignedWalletAuthToken({ aud: 'wrong-audience' })}`
+    });
+
+    const identity = resolveWalletFromHeaders(headers, walletAuthConfig);
+    expect(identity.wallet).toBeNull();
+    expect(identity.authError).toBe('wallet auth token audience is invalid');
   });
 });
 

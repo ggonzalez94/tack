@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { paymentMiddlewareFromHTTPServer } from '@x402/hono';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { decodePaymentSignatureHeader } from '@x402/core/http';
@@ -31,12 +31,25 @@ export interface X402PaymentConfig {
   maxPriceUsd: number;
 }
 
-export interface RequestWalletIdentity {
-  paidWallet: string | null;
-  authTokenWallet: string | null;
+export interface WalletAuthConfig {
+  secret: string;
+  issuer: string;
+  audience: string;
+  ttlSeconds: number;
+}
+
+export interface RequestOwnerIdentity {
   wallet: string | null;
   authError: string | null;
 }
+
+export interface WalletAuthToken {
+  token: string;
+  expiresAt: string;
+}
+
+export const WALLET_AUTH_TOKEN_RESPONSE_HEADER = 'x-wallet-auth-token';
+export const WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER = 'x-wallet-auth-token-expires-at';
 
 export interface RetrievalPaymentRequirement {
   payTo: string;
@@ -50,6 +63,8 @@ export type RetrievalPaymentResolver = (
 export interface X402PaymentMiddlewareOptions {
   resolveRetrievalPayment?: RetrievalPaymentResolver;
 }
+
+const MAX_WALLET_AUTH_CLOCK_SKEW_SECONDS = 60;
 
 function parsePositiveInteger(raw: string | undefined): number | undefined {
   if (!raw) {
@@ -219,6 +234,10 @@ export function extractPaidWalletFromHeader(headerValue: string | undefined): st
   }
 }
 
+export function extractPaidWalletFromHeaders(headers: Headers): string | null {
+  return extractPaidWalletFromHeader(getPaymentHeader(headers));
+}
+
 function getPaymentHeader(headers: Headers): string | undefined {
   return (
     headers.get('payment-signature') ??
@@ -260,7 +279,7 @@ function getWalletAuthToken(headers: Headers): { token: string | null; malformed
   };
 }
 
-function verifyWalletAuthToken(token: string, secret: string): { wallet: string | null; error: string | null } {
+function verifyWalletAuthToken(token: string, config: WalletAuthConfig): { wallet: string | null; error: string | null } {
   const segments = token.split('.');
   if (segments.length !== 3) {
     return { wallet: null, error: 'invalid wallet auth token' };
@@ -289,7 +308,7 @@ function verifyWalletAuthToken(token: string, secret: string): { wallet: string 
   }
 
   const expectedSignature = toBase64Url(
-    createHmac('sha256', secret)
+    createHmac('sha256', config.secret)
       .update(`${headerSegment}.${payloadSegment}`)
       .digest()
   );
@@ -301,12 +320,52 @@ function verifyWalletAuthToken(token: string, secret: string): { wallet: string 
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
-  if (typeof payload.exp === 'number' && Number.isFinite(payload.exp) && nowSeconds >= payload.exp) {
+  const issuedAt = typeof payload.iat === 'number' && Number.isFinite(payload.iat)
+    ? Math.trunc(payload.iat)
+    : null;
+  if (issuedAt === null) {
+    return { wallet: null, error: 'wallet auth token issued-at is invalid' };
+  }
+
+  if (issuedAt > nowSeconds + MAX_WALLET_AUTH_CLOCK_SKEW_SECONDS) {
+    return { wallet: null, error: 'wallet auth token issued-at is invalid' };
+  }
+
+  const expiresAt = typeof payload.exp === 'number' && Number.isFinite(payload.exp)
+    ? Math.trunc(payload.exp)
+    : null;
+  if (expiresAt === null) {
+    return { wallet: null, error: 'wallet auth token expiration is required' };
+  }
+
+  if (expiresAt <= issuedAt) {
+    return { wallet: null, error: 'wallet auth token expiration is invalid' };
+  }
+
+  if (expiresAt - issuedAt > config.ttlSeconds) {
+    return { wallet: null, error: 'wallet auth token lifetime exceeds maximum' };
+  }
+
+  if (nowSeconds >= expiresAt) {
     return { wallet: null, error: 'wallet auth token has expired' };
   }
 
   if (typeof payload.nbf === 'number' && Number.isFinite(payload.nbf) && nowSeconds < payload.nbf) {
     return { wallet: null, error: 'wallet auth token is not active yet' };
+  }
+
+  if (payload.iss !== config.issuer) {
+    return { wallet: null, error: 'wallet auth token issuer is invalid' };
+  }
+
+  const audience = payload.aud;
+  const validAudience = typeof audience === 'string'
+    ? audience === config.audience
+    : Array.isArray(audience)
+      ? audience.includes(config.audience)
+      : false;
+  if (!validAudience) {
+    return { wallet: null, error: 'wallet auth token audience is invalid' };
   }
 
   const wallet = normalizeWalletAddress(
@@ -324,30 +383,56 @@ function verifyWalletAuthToken(token: string, secret: string): { wallet: string 
   return { wallet, error: null };
 }
 
-export function resolveWalletFromHeaders(headers: Headers, walletAuthTokenSecret?: string): RequestWalletIdentity {
-  const paidWallet = extractPaidWalletFromHeader(getPaymentHeader(headers));
-  const { token, malformed } = getWalletAuthToken(headers);
-  let authTokenWallet: string | null = null;
-  let authError: string | null = null;
+export function createWalletAuthToken(walletAddress: string, config: WalletAuthConfig): WalletAuthToken {
+  const wallet = normalizeWalletAddress(walletAddress);
+  if (!wallet) {
+    throw new Error('wallet auth token wallet address is invalid');
+  }
 
-  if (!paidWallet) {
-    if (malformed) {
-      authError = 'invalid wallet auth token';
-    } else if (token) {
-      if (!walletAuthTokenSecret) {
-        authError = 'wallet auth token verification is not configured';
-      } else {
-        const verified = verifyWalletAuthToken(token, walletAuthTokenSecret);
-        authTokenWallet = verified.wallet;
-        authError = verified.error;
-      }
-    }
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const expiresAt = issuedAt + config.ttlSeconds;
+  const header = toBase64Url(Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' }), 'utf8'));
+  const payload = toBase64Url(
+    Buffer.from(
+      JSON.stringify({
+        sub: wallet,
+        iss: config.issuer,
+        aud: config.audience,
+        iat: issuedAt,
+        nbf: issuedAt,
+        exp: expiresAt,
+        jti: randomUUID()
+      }),
+      'utf8'
+    )
+  );
+  const signature = toBase64Url(
+    createHmac('sha256', config.secret)
+      .update(`${header}.${payload}`)
+      .digest()
+  );
+
+  return {
+    token: `${header}.${payload}.${signature}`,
+    expiresAt: new Date(expiresAt * 1000).toISOString()
+  };
+}
+
+export function resolveWalletFromHeaders(headers: Headers, walletAuthConfig: WalletAuthConfig): RequestOwnerIdentity {
+  const { token, malformed } = getWalletAuthToken(headers);
+  let authError: string | null = null;
+  let wallet: string | null = null;
+
+  if (malformed) {
+    authError = 'invalid wallet auth token';
+  } else if (token) {
+    const verified = verifyWalletAuthToken(token, walletAuthConfig);
+    wallet = verified.wallet;
+    authError = verified.error;
   }
 
   return {
-    paidWallet,
-    authTokenWallet,
-    wallet: paidWallet ?? authTokenWallet,
+    wallet,
     authError
   };
 }

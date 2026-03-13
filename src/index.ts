@@ -47,37 +47,40 @@ const pinningService = new PinningService(repository, ipfsClient, config.delegat
   maxGatewayContentSizeBytes: config.gatewayMaxContentSizeBytes,
   replicas: replicaClients
 });
-const paymentMiddleware = config.x402Enabled
-  ? createX402PaymentMiddleware({
-      facilitatorUrl: config.x402FacilitatorUrl,
-      network: config.x402Network as `${string}:${string}`,
-      payTo: config.x402PayTo,
-      usdcAssetAddress: config.x402UsdcAssetAddress,
-      usdcAssetDecimals: config.x402UsdcAssetDecimals,
-      usdcDomainName: config.x402UsdcDomainName,
-      usdcDomainVersion: config.x402UsdcDomainVersion,
-      basePriceUsd: config.x402BasePriceUsd,
-      pricePerMbUsd: config.x402PricePerMbUsd,
-      maxPriceUsd: config.x402MaxPriceUsd
-    }, undefined, {
-      resolveRetrievalPayment: (cid) => {
-        const policy = pinningService.resolveRetrievalPaymentPolicy(cid);
-        if (!policy) {
-          return null;
-        }
+const paymentMiddleware = createX402PaymentMiddleware({
+  facilitatorUrl: config.x402FacilitatorUrl,
+  network: config.x402Network as `${string}:${string}`,
+  payTo: config.x402PayTo,
+  usdcAssetAddress: config.x402UsdcAssetAddress,
+  usdcAssetDecimals: config.x402UsdcAssetDecimals,
+  usdcDomainName: config.x402UsdcDomainName,
+  usdcDomainVersion: config.x402UsdcDomainVersion,
+  basePriceUsd: config.x402BasePriceUsd,
+  pricePerMbUsd: config.x402PricePerMbUsd,
+  maxPriceUsd: config.x402MaxPriceUsd
+}, undefined, {
+  resolveRetrievalPayment: (cid) => {
+    const policy = pinningService.resolveRetrievalPaymentPolicy(cid);
+    if (!policy) {
+      return null;
+    }
 
-        return {
-          payTo: policy.payTo,
-          priceUsd: policy.priceUsd
-        };
-      }
-    })
-  : undefined;
+    return {
+      payTo: policy.payTo,
+      priceUsd: policy.priceUsd
+    };
+  }
+});
 
 const app = createApp({
   pinningService,
   paymentMiddleware,
-  walletAuthTokenSecret: config.walletAuthTokenSecret,
+  walletAuth: {
+    secret: config.walletAuthTokenSecret,
+    issuer: config.walletAuthTokenIssuer,
+    audience: config.walletAuthTokenAudience,
+    ttlSeconds: config.walletAuthTokenTtlSeconds
+  },
   gatewayCacheControlMaxAgeSeconds: config.gatewayCacheControlMaxAgeSeconds,
   uploadMaxSizeBytes: config.uploadMaxSizeBytes,
   publicBaseUrl: config.publicBaseUrl,
@@ -90,7 +93,6 @@ const app = createApp({
     name: 'Tack',
     description: 'Pin to IPFS, pay with your wallet. No account needed.',
     version: appVersion,
-    x402Enabled: config.x402Enabled,
     x402Network: config.x402Network,
     x402UsdcAssetAddress: config.x402UsdcAssetAddress,
     x402BasePriceUsd: config.x402BasePriceUsd,

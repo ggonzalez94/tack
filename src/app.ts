@@ -13,7 +13,14 @@ import { createExternalRequestUrlMiddleware } from './lib/request-url';
 import { toPinStatusResponse, type PinningService } from './services/pinning-service';
 import type { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
-import { resolveWalletFromHeaders } from './services/x402';
+import {
+  createWalletAuthToken,
+  extractPaidWalletFromHeaders,
+  resolveWalletFromHeaders,
+  WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER,
+  WALLET_AUTH_TOKEN_RESPONSE_HEADER,
+  type WalletAuthConfig
+} from './services/x402';
 import type { PinStatusValue } from './types';
 
 const DEFAULT_GATEWAY_CACHE_CONTROL_MAX_AGE_SECONDS = 31536000;
@@ -112,15 +119,6 @@ function parsePinPayload(payload: unknown): {
   };
 }
 
-function requireWallet(c: { get: (key: 'walletAddress' | 'paidWalletAddress') => string | null }, key: 'walletAddress' | 'paidWalletAddress'): string {
-  const wallet = c.get(key);
-  if (!wallet) {
-    throw new HTTPException(401, { message: 'wallet identity is required' });
-  }
-
-  return wallet;
-}
-
 function requireOwnerWallet(c: {
   get: (key: 'walletAddress' | 'walletAuthError') => string | null;
 }): string {
@@ -135,8 +133,28 @@ function requireOwnerWallet(c: {
   }
 
   throw new HTTPException(401, {
-    message: 'authenticated wallet identity is required (payment-signature or bearer token)'
+    message: 'authenticated wallet identity is required (bearer token)'
   });
+}
+
+function requirePaidWallet(headers: Headers): string {
+  const wallet = extractPaidWalletFromHeaders(headers);
+  if (!wallet) {
+    throw new HTTPException(401, { message: 'verified payment wallet identity is required' });
+  }
+
+  return wallet;
+}
+
+function issueWalletAuthToken(
+  c: { header: (name: string, value: string) => void },
+  wallet: string,
+  walletAuth: WalletAuthConfig
+): void {
+  const token = createWalletAuthToken(wallet, walletAuth);
+  c.header(WALLET_AUTH_TOKEN_RESPONSE_HEADER, token.token);
+  c.header(WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER, token.expiresAt);
+  c.header('Cache-Control', 'no-store');
 }
 
 async function parseJsonBody(c: { req: { json: () => Promise<unknown> } }): Promise<unknown> {
@@ -289,7 +307,6 @@ export interface AgentCardConfig {
   name: string;
   description: string;
   version: string;
-  x402Enabled: boolean;
   x402Network: string;
   x402UsdcAssetAddress: string;
   x402BasePriceUsd: number;
@@ -299,8 +316,8 @@ export interface AgentCardConfig {
 
 export interface AppServices {
   pinningService: PinningService;
-  paymentMiddleware?: MiddlewareHandler;
-  walletAuthTokenSecret?: string;
+  paymentMiddleware: MiddlewareHandler;
+  walletAuth: WalletAuthConfig;
   gatewayCacheControlMaxAgeSeconds?: number;
   uploadMaxSizeBytes?: number;
   publicBaseUrl?: string;
@@ -321,7 +338,6 @@ interface AppEnv {
   Variables: {
     requestId: string;
     walletAddress: string | null;
-    paidWalletAddress: string | null;
     walletAuthError: string | null;
   };
 }
@@ -338,9 +354,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     trustProxy
   }));
 
-  if (services.paymentMiddleware) {
-    app.use(services.paymentMiddleware);
-  }
+  app.use(services.paymentMiddleware);
 
   app.use('*', async (c, next) => {
     const requestId = c.req.header('x-request-id') ?? randomUUID();
@@ -349,8 +363,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     c.set('requestId', requestId);
     c.header('X-Request-Id', requestId);
 
-    const identity = resolveWalletFromHeaders(c.req.raw.headers, services.walletAuthTokenSecret);
-    c.set('paidWalletAddress', identity.paidWallet);
+    const identity = resolveWalletFromHeaders(c.req.raw.headers, services.walletAuth);
     c.set('walletAddress', identity.wallet);
     c.set('walletAuthError', identity.authError);
 
@@ -375,7 +388,6 @@ export function createApp(services: AppServices): Hono<AppEnv> {
         status: c.res.status,
         durationMs: Date.now() - requestStartedAt,
         walletAddress: identity.wallet,
-        paidWalletAddress: identity.paidWallet
       }, 'request handled');
     } catch (error) {
       logger.error({
@@ -385,7 +397,6 @@ export function createApp(services: AppServices): Hono<AppEnv> {
         status: statusFromError(error),
         durationMs: Date.now() - requestStartedAt,
         walletAddress: identity.wallet,
-        paidWalletAddress: identity.paidWallet,
         err: error
       }, 'request failed');
       throw error;
@@ -436,16 +447,14 @@ export function createApp(services: AppServices): Hono<AppEnv> {
         }
       },
       pricing: {
-        pinning: agent?.x402Enabled
-          ? {
-              protocol: 'x402',
-              network: agent.x402Network,
-              asset: agent.x402UsdcAssetAddress,
-              baseUsd: agent.x402BasePriceUsd,
-              perMbUsd: agent.x402PricePerMbUsd,
-              maxUsd: agent.x402MaxPriceUsd
-            }
-          : null,
+        pinning: {
+          protocol: 'x402',
+          network: agent?.x402Network,
+          asset: agent?.x402UsdcAssetAddress,
+          baseUsd: agent?.x402BasePriceUsd,
+          perMbUsd: agent?.x402PricePerMbUsd,
+          maxUsd: agent?.x402MaxPriceUsd
+        },
         retrieval: {
           protocol: 'x402-optional',
           metadataField: 'meta.retrievalPrice',
@@ -457,7 +466,8 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
   app.post('/pins', async (c) => {
     const body = parsePinPayload(await parseJsonBody(c));
-    const paidWallet = requireWallet(c, 'paidWalletAddress');
+    const paidWallet = requirePaidWallet(c.req.raw.headers);
+    issueWalletAuthToken(c, paidWallet, services.walletAuth);
     const result = await services.pinningService.createPin({ ...body, owner: paidWallet });
     return c.json(toPinStatusResponse(result), 202);
   });
@@ -509,7 +519,8 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   });
 
   app.post('/upload', async (c) => {
-    requireWallet(c, 'paidWalletAddress');
+    const paidWallet = requirePaidWallet(c.req.raw.headers);
+    issueWalletAuthToken(c, paidWallet, services.walletAuth);
     const formData = await c.req.formData();
     const upload = formData.get('file');
 
