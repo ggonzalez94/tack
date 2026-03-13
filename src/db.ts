@@ -22,6 +22,12 @@ export function createDb(dbPath: string): Database.Database {
       updated TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS cid_owners (
+      cid TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      created TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_pins_cid ON pins(cid);
     CREATE INDEX IF NOT EXISTS idx_pins_name ON pins(name);
     CREATE INDEX IF NOT EXISTS idx_pins_status ON pins(status);

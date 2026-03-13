@@ -409,6 +409,7 @@ describe('API integration', () => {
     expect(first.headers.get('x-cache')).toBe('MISS');
     expect(first.headers.get('cache-control')).toContain('immutable');
     expect(first.headers.get('etag')).toBe('"bafy-text"');
+    expect(first.headers.get('x-content-type-options')).toBe('nosniff');
 
     const second = await app.request('http://localhost/ipfs/bafy-text');
     expect(second.status).toBe(200);
@@ -430,6 +431,24 @@ describe('API integration', () => {
       })
     );
     expect(notModified.status).toBe(304);
+  });
+
+  it('forces attachment for active browser content', async () => {
+    await paidRequest(app, 'http://localhost/pins', walletA, () => ({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        cid: 'bafy-html',
+        name: 'unsafe page.html',
+        meta: { contentType: 'text/html; charset=utf-8' }
+      })
+    }));
+
+    const response = await app.request('http://localhost/ipfs/bafy-html');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('content-disposition')).toBe('attachment; filename=\"unsafe_page.html\"');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
   it('serves an AgentCard endpoint', async () => {
