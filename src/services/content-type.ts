@@ -19,6 +19,18 @@ const extensionToMimeType: Record<string, string> = {
   mp4: 'video/mp4'
 };
 
+const MIME_TOKEN_REGEX = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const SAFE_INLINE_MIME_TYPES = new Set([
+  'application/json',
+  'application/pdf',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'text/csv',
+  'text/plain'
+]);
+
 function hasOnlyTextCharacters(content: Uint8Array): boolean {
   for (const byte of content) {
     if (byte === 9 || byte === 10 || byte === 13) {
@@ -88,10 +100,40 @@ function mimeTypeFromFilename(filename: string | null): string | null {
   return extensionToMimeType[extension] ?? null;
 }
 
+function normalizeDeclaredMimeType(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || /[\r\n]/.test(trimmed) || !/^[\x20-\x7e]+$/.test(trimmed)) {
+    return null;
+  }
+
+  const [rawEssence, ...rawParameters] = trimmed.split(';');
+  const [rawType, rawSubtype] = rawEssence.trim().toLowerCase().split('/', 2);
+  if (!rawType || !rawSubtype || !MIME_TOKEN_REGEX.test(rawType) || !MIME_TOKEN_REGEX.test(rawSubtype)) {
+    return null;
+  }
+
+  const normalizedParameters = rawParameters
+    .map((parameter) => parameter.trim())
+    .filter((parameter) => parameter.length > 0);
+
+  if (normalizedParameters.length === 0) {
+    return `${rawType}/${rawSubtype}`;
+  }
+
+  return `${rawType}/${rawSubtype}; ${normalizedParameters.join('; ')}`;
+}
+
+function mimeEssence(contentType: string): string {
+  return contentType.split(';', 1)[0]?.trim().toLowerCase() ?? 'application/octet-stream';
+}
+
 export function resolveContentType(content: ArrayBuffer, filename: string | null, meta: Record<string, string>): string {
   const fromMeta = meta.contentType ?? meta['content-type'] ?? meta.mimeType;
   if (fromMeta) {
-    return fromMeta;
+    const normalized = normalizeDeclaredMimeType(fromMeta);
+    if (normalized) {
+      return normalized;
+    }
   }
 
   const fromFilename = mimeTypeFromFilename(filename);
@@ -100,4 +142,33 @@ export function resolveContentType(content: ArrayBuffer, filename: string | null
   }
 
   return sniffMimeType(new Uint8Array(content));
+}
+
+export function shouldServeContentAsAttachment(contentType: string): boolean {
+  const essence = mimeEssence(contentType);
+  if (SAFE_INLINE_MIME_TYPES.has(essence)) {
+    return false;
+  }
+
+  if (essence.startsWith('audio/') || essence.startsWith('video/')) {
+    return false;
+  }
+
+  if (essence.startsWith('image/') && essence !== 'image/svg+xml') {
+    return false;
+  }
+
+  return true;
+}
+
+export function createContentDispositionHeader(filename: string | null): string {
+  if (!filename) {
+    return 'attachment';
+  }
+
+  const sanitizedFilename = filename
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  return `attachment; filename=\"${sanitizedFilename || 'download'}\"`;
 }

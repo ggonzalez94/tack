@@ -15,6 +15,12 @@ interface DbPinRow {
   updated: string;
 }
 
+interface DbCidOwnerRow {
+  cid: string;
+  owner: string;
+  created: string;
+}
+
 export interface PinListFilters {
   cid?: string;
   name?: string;
@@ -33,6 +39,31 @@ export interface PinListResult {
 
 export class PinRepository {
   constructor(private readonly db: Database.Database) {}
+
+  claimCidOwner(cid: string, owner: string, created: string): void {
+    const historicalOwner = this.findHistoricalCidOwner(cid);
+    const canonicalOwner = historicalOwner?.owner ?? owner;
+    const canonicalCreated = historicalOwner?.created ?? created;
+
+    this.db
+      .prepare(`
+        INSERT OR IGNORE INTO cid_owners (cid, owner, created)
+        VALUES (?, ?, ?)
+      `)
+      .run(cid, canonicalOwner, canonicalCreated);
+  }
+
+  findCidOwner(cid: string): string | null {
+    const row = this.db
+      .prepare('SELECT cid, owner, created FROM cid_owners WHERE cid = ?')
+      .get(cid) as DbCidOwnerRow | undefined;
+
+    if (row) {
+      return row.owner;
+    }
+
+    return this.findHistoricalCidOwner(cid)?.owner ?? null;
+  }
 
   create(record: StoredPinRecord): void {
     const statement = this.db.prepare(`
@@ -108,7 +139,7 @@ export class PinRepository {
           SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
           FROM pins
           WHERE cid = ? AND status = 'pinned'
-          ORDER BY updated DESC
+          ORDER BY updated DESC, created DESC, rowid DESC
           LIMIT 1
         `
       )
@@ -124,11 +155,43 @@ export class PinRepository {
           SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
           FROM pins
           WHERE cid = ?
-          ORDER BY updated DESC
+          ORDER BY updated DESC, created DESC, rowid DESC
           LIMIT 1
         `
       )
       .get(cid) as DbPinRow | undefined;
+
+    return fallbackRow ? this.mapRow(fallbackRow) : null;
+  }
+
+  findLatestByCidAndOwner(cid: string, owner: string): StoredPinRecord | null {
+    const pinnedRow = this.db
+      .prepare(
+        `
+          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+          FROM pins
+          WHERE cid = ? AND owner = ? AND status = 'pinned'
+          ORDER BY updated DESC, created DESC, rowid DESC
+          LIMIT 1
+        `
+      )
+      .get(cid, owner) as DbPinRow | undefined;
+
+    if (pinnedRow) {
+      return this.mapRow(pinnedRow);
+    }
+
+    const fallbackRow = this.db
+      .prepare(
+        `
+          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+          FROM pins
+          WHERE cid = ? AND owner = ?
+          ORDER BY updated DESC, created DESC, rowid DESC
+          LIMIT 1
+        `
+      )
+      .get(cid, owner) as DbPinRow | undefined;
 
     return fallbackRow ? this.mapRow(fallbackRow) : null;
   }
@@ -205,5 +268,37 @@ export class PinRepository {
       created: row.created,
       updated: row.updated
     };
+  }
+
+  private findHistoricalCidOwner(cid: string): DbCidOwnerRow | null {
+    const pinnedRow = this.db
+      .prepare(
+        `
+          SELECT cid, owner, created
+          FROM pins
+          WHERE cid = ? AND status = 'pinned'
+          ORDER BY created ASC
+          LIMIT 1
+        `
+      )
+      .get(cid) as DbCidOwnerRow | undefined;
+
+    if (pinnedRow) {
+      return pinnedRow;
+    }
+
+    const fallbackRow = this.db
+      .prepare(
+        `
+          SELECT cid, owner, created
+          FROM pins
+          WHERE cid = ?
+          ORDER BY created ASC
+          LIMIT 1
+        `
+      )
+      .get(cid) as DbCidOwnerRow | undefined;
+
+    return fallbackRow ?? null;
   }
 }

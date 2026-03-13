@@ -54,6 +54,10 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 
 **Auth model**: Paid endpoints use `payment-signature` (x402). Successful paid responses return a short-lived `x-wallet-auth-token` response header. Owner endpoints (list, get, replace, delete) require that bearer token. The wallet that pays owns the pin.
 
+**Gateway safety**: Tack serves browser-active content types with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff` so HTML/SVG/JS payloads are not executed inline from the API origin.
+
+**Retrieval pricing**: `meta.retrievalPrice` is controlled by the first wallet that pins a CID through Tack. Later pins of the same CID cannot redirect premium retrieval payouts.
+
 ## For AI Agents
 
 Tack exposes an [A2A](https://google.github.io/A2A/) agent card at `/.well-known/agent.json`. An agent with a wallet can discover Tack, pin content, and pay — no human in the loop.

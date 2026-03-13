@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveContentType } from '../../src/services/content-type';
+import {
+  createContentDispositionHeader,
+  resolveContentType,
+  shouldServeContentAsAttachment
+} from '../../src/services/content-type';
 
 describe('resolveContentType', () => {
   it('prefers explicit metadata content type', () => {
@@ -35,5 +39,32 @@ describe('resolveContentType', () => {
   it('returns application/octet-stream for non-text unknown bytes', () => {
     const resolved = resolveContentType(new Uint8Array([0x00, 0x01, 0x02, 0x03]).buffer, null, {});
     expect(resolved).toBe('application/octet-stream');
+  });
+
+  it('ignores invalid metadata content types', () => {
+    const resolved = resolveContentType(new TextEncoder().encode('hello').buffer, 'payload.txt', {
+      contentType: 'text/html\r\nx-injected: true'
+    });
+
+    expect(resolved).toBe('text/plain; charset=utf-8');
+  });
+});
+
+describe('gateway content headers', () => {
+  it('forces attachment for active browser content types', () => {
+    expect(shouldServeContentAsAttachment('text/html; charset=utf-8')).toBe(true);
+    expect(shouldServeContentAsAttachment('image/svg+xml')).toBe(true);
+    expect(shouldServeContentAsAttachment('application/javascript; charset=utf-8')).toBe(true);
+  });
+
+  it('keeps safe content types inline', () => {
+    expect(shouldServeContentAsAttachment('text/plain; charset=utf-8')).toBe(false);
+    expect(shouldServeContentAsAttachment('image/png')).toBe(false);
+    expect(shouldServeContentAsAttachment('video/mp4')).toBe(false);
+  });
+
+  it('sanitizes attachment filenames', () => {
+    expect(createContentDispositionHeader('unsafe file<>.html')).toBe('attachment; filename=\"unsafe_file_.html\"');
+    expect(createContentDispositionHeader(null)).toBe('attachment');
   });
 });

@@ -13,6 +13,7 @@ import { createExternalRequestUrlMiddleware } from './lib/request-url';
 import { toPinStatusResponse, type PinningService } from './services/pinning-service';
 import type { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
+import { createContentDispositionHeader, shouldServeContentAsAttachment } from './services/content-type';
 import {
   createWalletAuthToken,
   extractPaidWalletFromHeaders,
@@ -547,10 +548,15 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     const headers = new Headers({
       'Content-Type': resolved.contentType,
       'Cache-Control': `public, max-age=${cacheControlMaxAgeSeconds}, immutable`,
+      'X-Content-Type-Options': 'nosniff',
       ETag: etag,
       'Accept-Ranges': 'bytes',
       'X-Cache': resolved.cacheHit ? 'HIT' : 'MISS'
     });
+
+    if (shouldServeContentAsAttachment(resolved.contentType)) {
+      headers.set('Content-Disposition', createContentDispositionHeader(resolved.filename));
+    }
 
     if (!rangeHeader && ifNoneMatchIncludesEtag(c.req.header('if-none-match') ?? null, etag)) {
       return new Response(null, { status: 304, headers });

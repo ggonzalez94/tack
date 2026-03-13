@@ -121,6 +121,7 @@ export class PinningService {
 
     try {
       await this.ipfsClient.pinAdd(record.cid);
+      this.repository.claimCidOwner(record.cid, record.owner, record.created);
       const replicaResults = await this.pinOnReplicas(record.cid);
       const updated = {
         ...record,
@@ -183,6 +184,7 @@ export class PinningService {
 
     try {
       await this.ipfsClient.pinAdd(next.cid);
+      this.repository.claimCidOwner(next.cid, next.owner, next.created);
       const replicaResults = await this.pinOnReplicas(next.cid);
       const pinned = {
         ...next,
@@ -239,7 +241,12 @@ export class PinningService {
   }
 
   resolveRetrievalPaymentPolicy(cid: string): RetrievalPaymentPolicy | null {
-    const record = this.repository.findLatestByCid(cid);
+    const owner = this.repository.findCidOwner(cid);
+    if (!owner) {
+      return null;
+    }
+
+    const record = this.repository.findLatestByCidAndOwner(cid, owner);
     if (!record) {
       return null;
     }
@@ -251,7 +258,7 @@ export class PinningService {
 
     return {
       cid,
-      payTo: record.owner,
+      payTo: owner,
       priceUsd
     };
   }

@@ -141,4 +141,42 @@ describe('PinningService', () => {
       }
     });
   });
+
+  it('uses the canonical cid owner for retrieval paywall resolution', async () => {
+    await service.createPin({
+      cid: 'bafy-premium',
+      owner: wallet,
+      meta: { retrievalPrice: '0.002' }
+    });
+    await service.createPin({
+      cid: 'bafy-premium',
+      owner: otherWallet,
+      meta: { retrievalPrice: '0.009' }
+    });
+
+    expect(service.resolveRetrievalPaymentPolicy('bafy-premium')).toEqual({
+      cid: 'bafy-premium',
+      payTo: wallet,
+      priceUsd: 0.002
+    });
+  });
+
+  it('lets the canonical cid owner update retrieval pricing later', async () => {
+    await service.createPin({
+      cid: 'bafy-price-update',
+      owner: wallet,
+      meta: { retrievalPrice: '0.002' }
+    });
+    await service.createPin({
+      cid: 'bafy-price-update',
+      owner: wallet,
+      meta: { retrievalPrice: '0.003' }
+    });
+
+    expect(service.resolveRetrievalPaymentPolicy('bafy-price-update')).toEqual({
+      cid: 'bafy-price-update',
+      payTo: wallet,
+      priceUsd: 0.003
+    });
+  });
 });
