@@ -41,6 +41,7 @@ export interface WalletAuthConfig {
 export interface RequestOwnerIdentity {
   wallet: string | null;
   authError: string | null;
+  paidWallet: string | null;
 }
 
 export interface WalletAuthToken {
@@ -433,7 +434,8 @@ export function resolveWalletFromHeaders(headers: Headers, walletAuthConfig: Wal
 
   return {
     wallet,
-    authError
+    authError,
+    paidWallet: wallet ? null : extractPaidWalletFromHeaders(headers)
   };
 }
 

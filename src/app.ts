@@ -369,7 +369,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
     try {
       if (services.rateLimiter) {
-        const key = identity.wallet ?? `ip:${getRequesterIp(c.env, c.req.raw.headers, trustProxy)}`;
+        const key = identity.wallet ?? identity.paidWallet ?? `ip:${getRequesterIp(c.env, c.req.raw.headers, trustProxy)}`;
         const rateLimit = services.rateLimiter.consume(key);
         c.header('X-RateLimit-Limit', String(rateLimit.limit));
         c.header('X-RateLimit-Remaining', String(rateLimit.remaining));
@@ -520,7 +520,6 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
   app.post('/upload', async (c) => {
     const paidWallet = requirePaidWallet(c.req.raw.headers);
-    issueWalletAuthToken(c, paidWallet, services.walletAuth);
     const formData = await c.req.formData();
     const upload = formData.get('file');
 
@@ -532,6 +531,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
       throw new PayloadTooLargeError(`Upload exceeds ${uploadMaxSizeBytes} bytes`);
     }
 
+    issueWalletAuthToken(c, paidWallet, services.walletAuth);
     const cid = await services.pinningService.uploadContent(await upload.arrayBuffer(), upload.name || 'upload.bin');
 
     return c.json({ cid }, 201);
