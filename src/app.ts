@@ -261,17 +261,30 @@ function parseRangeHeader(raw: string | null, totalSize: number): ByteRange | nu
 }
 
 function parseDeclaredRequestSize(headers: Headers): number | null {
-  const rawValue = headers.get('x-content-size-bytes') ?? headers.get('content-length');
-  if (!rawValue) {
+  const rawCustom = headers.get('x-content-size-bytes');
+  const rawContentLength = headers.get('content-length');
+
+  if (!rawCustom && !rawContentLength) {
     return null;
   }
 
-  const parsed = Number(rawValue);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    return null;
+  let result: number | null = null;
+
+  if (rawCustom) {
+    const parsed = Number(rawCustom);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      result = parsed;
+    }
   }
 
-  return parsed;
+  if (rawContentLength) {
+    const parsed = Number(rawContentLength);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      result = result === null ? parsed : Math.max(result, parsed);
+    }
+  }
+
+  return result;
 }
 
 function ifNoneMatchIncludesEtag(ifNoneMatch: string | null, etag: string): boolean {

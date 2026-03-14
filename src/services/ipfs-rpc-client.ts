@@ -158,6 +158,7 @@ export class IpfsRpcClient implements IpfsClient {
       if (contentLength) {
         const declaredLength = Number.parseInt(contentLength, 10);
         if (Number.isInteger(declaredLength) && declaredLength > maxBytes) {
+          await response.body?.cancel();
           throw new PayloadTooLargeError(`Gateway content exceeds ${maxBytes} bytes`);
         }
       }
