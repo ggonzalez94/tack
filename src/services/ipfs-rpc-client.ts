@@ -1,4 +1,4 @@
-import { GatewayTimeoutError, UpstreamServiceError } from '../lib/errors';
+import { GatewayTimeoutError, PayloadTooLargeError, UpstreamServiceError } from '../lib/errors';
 import { logger } from './logger';
 
 interface IpfsAddResponse {
@@ -10,8 +10,8 @@ interface IpfsAddResponse {
 export interface IpfsClient {
   pinAdd(cid: string): Promise<void>;
   pinRm(cid: string): Promise<void>;
-  addContent(content: ArrayBuffer, filename: string): Promise<string>;
-  cat(cid: string): Promise<ArrayBuffer>;
+  addContent(content: Blob, filename: string): Promise<string>;
+  cat(cid: string, options?: { maxBytes?: number }): Promise<ArrayBuffer>;
 }
 
 export interface IpfsRpcClientOptions {
@@ -51,10 +51,9 @@ export class IpfsRpcClient implements IpfsClient {
     return this.postJson('/api/v0/id', undefined, this.timeoutMs, 'id');
   }
 
-  async addContent(content: ArrayBuffer, filename: string): Promise<string> {
+  async addContent(content: Blob, filename: string): Promise<string> {
     const form = new FormData();
-    const file = new File([content], filename, { type: 'application/octet-stream' });
-    form.append('file', file);
+    form.append('file', content, filename);
 
     const response = await this.fetchWithTimeout(new URL('/api/v0/add', this.apiBaseUrl), {
       method: 'POST',
@@ -70,7 +69,7 @@ export class IpfsRpcClient implements IpfsClient {
     return data.Hash;
   }
 
-  async cat(cid: string): Promise<ArrayBuffer> {
+  async cat(cid: string, options?: { maxBytes?: number }): Promise<ArrayBuffer> {
     const url = new URL('/api/v0/cat', this.apiBaseUrl);
     url.searchParams.set('arg', cid);
 
@@ -80,7 +79,7 @@ export class IpfsRpcClient implements IpfsClient {
       throw new UpstreamServiceError('IPFS request failed');
     }
 
-    return response.arrayBuffer();
+    return this.readContentWithLimit(response, options?.maxBytes);
   }
 
   private async postJson(
@@ -151,5 +150,63 @@ export class IpfsRpcClient implements IpfsClient {
       statusText: response.statusText,
       body: responseBody
     }, 'IPFS upstream response was not successful');
+  }
+
+  private async readContentWithLimit(response: Response, maxBytes?: number): Promise<ArrayBuffer> {
+    if (maxBytes !== undefined) {
+      const contentLength = response.headers.get('content-length');
+      if (contentLength) {
+        const declaredLength = Number.parseInt(contentLength, 10);
+        if (Number.isInteger(declaredLength) && declaredLength > maxBytes) {
+          await response.body?.cancel();
+          throw new PayloadTooLargeError(`Gateway content exceeds ${maxBytes} bytes`);
+        }
+      }
+    }
+
+    if (!response.body) {
+      const buffer = await response.arrayBuffer();
+      if (maxBytes !== undefined && buffer.byteLength > maxBytes) {
+        throw new PayloadTooLargeError(`Gateway content exceeds ${maxBytes} bytes`);
+      }
+
+      return buffer;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        if (!value) {
+          continue;
+        }
+
+        totalBytes += value.byteLength;
+        if (maxBytes !== undefined && totalBytes > maxBytes) {
+          await reader.cancel('gateway content too large');
+          throw new PayloadTooLargeError(`Gateway content exceeds ${maxBytes} bytes`);
+        }
+
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const buffer = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      buffer.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    return buffer.buffer;
   }
 }

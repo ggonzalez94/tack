@@ -9,6 +9,7 @@ import {
   UpstreamServiceError,
   ValidationError
 } from './lib/errors';
+import { isTrustedProxy } from './lib/proxy-trust';
 import { createExternalRequestUrlMiddleware } from './lib/request-url';
 import { toPinStatusResponse, type PinningService } from './services/pinning-service';
 import type { InMemoryRateLimiter } from './services/rate-limiter';
@@ -26,6 +27,7 @@ import type { PinStatusValue } from './types';
 
 const DEFAULT_GATEWAY_CACHE_CONTROL_MAX_AGE_SECONDS = 31536000;
 const DEFAULT_UPLOAD_MAX_SIZE_BYTES = 100 * 1024 * 1024;
+const MULTIPART_REQUEST_SIZE_OVERHEAD_BYTES = 64 * 1024;
 
 interface ByteRange {
   start: number;
@@ -173,14 +175,15 @@ function normalizeIp(value: string): string {
 function getRequesterIp(
   env: { incoming?: { socket?: { remoteAddress?: string | null } } } | undefined,
   headers: Headers,
-  trustProxy: boolean
+  trustProxy: boolean,
+  trustedProxyCidrs: string[]
 ): string {
   const remoteAddress = env?.incoming?.socket?.remoteAddress;
   const normalizedRemoteAddress = typeof remoteAddress === 'string' && remoteAddress.length > 0
     ? normalizeIp(remoteAddress)
     : 'unknown';
 
-  if (!trustProxy) {
+  if (!trustProxy || !isTrustedProxy(remoteAddress, trustedProxyCidrs)) {
     return normalizedRemoteAddress;
   }
 
@@ -257,6 +260,33 @@ function parseRangeHeader(raw: string | null, totalSize: number): ByteRange | nu
   return { start, end: Math.min(parsedEnd, totalSize - 1) };
 }
 
+function parseDeclaredRequestSize(headers: Headers): number | null {
+  const rawCustom = headers.get('x-content-size-bytes');
+  const rawContentLength = headers.get('content-length');
+
+  if (!rawCustom && !rawContentLength) {
+    return null;
+  }
+
+  let result: number | null = null;
+
+  if (rawCustom) {
+    const parsed = Number(rawCustom);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      result = parsed;
+    }
+  }
+
+  if (rawContentLength) {
+    const parsed = Number(rawContentLength);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      result = result === null ? parsed : Math.max(result, parsed);
+    }
+  }
+
+  return result;
+}
+
 function ifNoneMatchIncludesEtag(ifNoneMatch: string | null, etag: string): boolean {
   if (!ifNoneMatch) {
     return false;
@@ -323,6 +353,7 @@ export interface AppServices {
   uploadMaxSizeBytes?: number;
   publicBaseUrl?: string;
   trustProxy?: boolean;
+  trustedProxyCidrs?: string[];
   rateLimiter?: InMemoryRateLimiter;
   healthCheck?: () => Promise<void>;
   agentCard?: AgentCardConfig;
@@ -349,10 +380,12 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   const uploadMaxSizeBytes = services.uploadMaxSizeBytes ?? DEFAULT_UPLOAD_MAX_SIZE_BYTES;
   const publicBaseUrl = services.publicBaseUrl;
   const trustProxy = services.trustProxy ?? false;
+  const trustedProxyCidrs = services.trustedProxyCidrs ?? [];
 
   app.use('*', createExternalRequestUrlMiddleware({
     publicBaseUrl,
-    trustProxy
+    trustProxy,
+    trustedProxyCidrs
   }));
 
   app.use(services.paymentMiddleware);
@@ -370,7 +403,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
     try {
       if (services.rateLimiter) {
-        const key = identity.wallet ?? identity.paidWallet ?? `ip:${getRequesterIp(c.env, c.req.raw.headers, trustProxy)}`;
+        const key = identity.wallet ?? identity.paidWallet ?? `ip:${getRequesterIp(c.env, c.req.raw.headers, trustProxy, trustedProxyCidrs)}`;
         const rateLimit = services.rateLimiter.consume(key);
         c.header('X-RateLimit-Limit', String(rateLimit.limit));
         c.header('X-RateLimit-Remaining', String(rateLimit.remaining));
@@ -521,6 +554,11 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
   app.post('/upload', async (c) => {
     const paidWallet = requirePaidWallet(c.req.raw.headers);
+    const declaredRequestSize = parseDeclaredRequestSize(c.req.raw.headers);
+    if (declaredRequestSize !== null && declaredRequestSize > uploadMaxSizeBytes + MULTIPART_REQUEST_SIZE_OVERHEAD_BYTES) {
+      throw new PayloadTooLargeError(`Upload exceeds ${uploadMaxSizeBytes} bytes`);
+    }
+
     const formData = await c.req.formData();
     const upload = formData.get('file');
 
@@ -533,7 +571,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     }
 
     issueWalletAuthToken(c, paidWallet, services.walletAuth);
-    const cid = await services.pinningService.uploadContent(await upload.arrayBuffer(), upload.name || 'upload.bin');
+    const cid = await services.pinningService.uploadContent(upload, upload.name || 'upload.bin');
 
     return c.json({ cid }, 201);
   });

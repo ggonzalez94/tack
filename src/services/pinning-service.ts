@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { NotFoundError, PayloadTooLargeError } from '../lib/errors';
+import { NotFoundError } from '../lib/errors';
 import type { PinStatusResponse, PinStatusValue, StoredPinRecord } from '../types';
 import type { PinListFilters, PinRepository } from '../repositories/pin-repository';
 import { resolveContentType } from './content-type';
@@ -335,7 +335,7 @@ export class PinningService {
     };
   }
 
-  async uploadContent(content: ArrayBuffer, filename: string): Promise<string> {
+  async uploadContent(content: Blob, filename: string): Promise<string> {
     return this.ipfsClient.addContent(content, filename);
   }
 
@@ -351,10 +351,7 @@ export class PinningService {
       };
     }
 
-    const content = await this.ipfsClient.cat(cid);
-    if (content.byteLength > this.maxGatewayContentSizeBytes) {
-      throw new PayloadTooLargeError(`Gateway content exceeds ${this.maxGatewayContentSizeBytes} bytes`);
-    }
+    const content = await this.ipfsClient.cat(cid, { maxBytes: this.maxGatewayContentSizeBytes });
 
     const pin = this.repository.findLatestByCid(cid);
     const filename = pin?.name ?? null;

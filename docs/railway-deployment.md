@@ -42,7 +42,8 @@ Set these in Railway Variables.
 | `DATABASE_PATH` | `/app/data/tack.db` | Must be on the mounted persistent volume. |
 | `DELEGATE_URL` | `https://<ipfs-gateway-domain>/ipfs` | Returned in pin delegates metadata. |
 | `PUBLIC_BASE_URL` | `https://<your-api-domain>` | Recommended. Used for AgentCard and x402 absolute resource URLs. |
-| `TRUST_PROXY` | `true` | Railway terminates edge traffic before your service. |
+| `TRUST_PROXY` | `true` | Enables forwarded header parsing when the socket remote address matches `TRUSTED_PROXY_CIDRS`. |
+| `TRUSTED_PROXY_CIDRS` | Railway proxy CIDRs | Required if you want to trust forwarded client IP/host/proto headers. |
 | `WALLET_AUTH_TOKEN_SECRET` | long random secret | Required. Used to mint and verify short-lived owner bearer tokens. |
 | `WALLET_AUTH_TOKEN_ISSUER` | `tack` | Optional. JWT issuer for owner bearer tokens. |
 | `WALLET_AUTH_TOKEN_AUDIENCE` | `tack-owner-api` | Optional. JWT audience for owner bearer tokens. |
@@ -105,7 +106,7 @@ When a release causes issues:
 4. `X402_PAY_TO` and `X402_USDC_ASSET_ADDRESS` are real Taiko Alethia addresses.
 5. `WALLET_AUTH_TOKEN_SECRET` is set to a strong random value.
 6. `PUBLIC_BASE_URL` matches the public Railway HTTPS domain.
-7. `TRUST_PROXY=true` configured.
+7. `TRUST_PROXY=true` with `TRUSTED_PROXY_CIDRS` configured.
 8. `/health` stable at `200` over repeated checks.
 9. End-to-end smoke passes (`pnpm smoke:x402`) against Railway URL.
 10. Manual pin/list/get/delete flow works with the issued owner bearer token.

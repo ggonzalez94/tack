@@ -471,7 +471,8 @@ describe('API integration', () => {
 
   it('uses forwarded host and proto in the AgentCard when trustProxy is enabled', async () => {
     const trustedProxyApp = buildApp({
-      trustProxy: true
+      trustProxy: true,
+      trustedProxyCidrs: ['10.0.0.0/8']
     });
 
     const response = await trustedProxyApp.request(
@@ -480,7 +481,15 @@ describe('API integration', () => {
           'x-forwarded-host': 'tack-api-production.up.railway.app',
           'x-forwarded-proto': 'https'
         }
-      })
+      }),
+      undefined,
+      {
+        incoming: {
+          socket: {
+            remoteAddress: '10.0.0.4'
+          }
+        }
+      }
     );
 
     expect(response.status).toBe(200);
@@ -491,7 +500,8 @@ describe('API integration', () => {
   it('prefers PUBLIC_BASE_URL for the AgentCard over forwarded headers', async () => {
     const publicBaseUrlApp = buildApp({
       publicBaseUrl: 'https://api.tack.example',
-      trustProxy: true
+      trustProxy: true,
+      trustedProxyCidrs: ['10.0.0.0/8']
     });
 
     const response = await publicBaseUrlApp.request(
@@ -500,7 +510,15 @@ describe('API integration', () => {
           'x-forwarded-host': 'internal-only.example',
           'x-forwarded-proto': 'http'
         }
-      })
+      }),
+      undefined,
+      {
+        incoming: {
+          socket: {
+            remoteAddress: '10.0.0.4'
+          }
+        }
+      }
     );
 
     expect(response.status).toBe(200);
@@ -560,20 +578,37 @@ describe('API integration', () => {
   it('uses forwarded IP headers when trustProxy is enabled', async () => {
     const trustedProxyApp = buildApp({
       rateLimiter: new InMemoryRateLimiter(1, 60_000),
-      trustProxy: true
+      trustProxy: true,
+      trustedProxyCidrs: ['10.0.0.0/8']
     });
 
     const first = await trustedProxyApp.request(
       new Request('http://localhost/health', {
         headers: { 'x-forwarded-for': '198.51.100.10' }
-      })
+      }),
+      undefined,
+      {
+        incoming: {
+          socket: {
+            remoteAddress: '10.0.0.4'
+          }
+        }
+      }
     );
     expect(first.status).toBe(200);
 
     const second = await trustedProxyApp.request(
       new Request('http://localhost/health', {
         headers: { 'x-forwarded-for': '198.51.100.11' }
-      })
+      }),
+      undefined,
+      {
+        incoming: {
+          socket: {
+            remoteAddress: '10.0.0.4'
+          }
+        }
+      }
     );
     expect(second.status).toBe(200);
   });

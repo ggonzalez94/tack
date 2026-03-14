@@ -85,6 +85,7 @@ const app = createApp({
   uploadMaxSizeBytes: config.uploadMaxSizeBytes,
   publicBaseUrl: config.publicBaseUrl,
   trustProxy: config.trustProxy,
+  trustedProxyCidrs: config.trustedProxyCidrs,
   healthCheck: async () => {
     await ipfsClient.id();
   },

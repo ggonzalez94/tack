@@ -1,13 +1,27 @@
 import type { MiddlewareHandler } from 'hono';
+import { isTrustedProxy } from './proxy-trust';
 
 export interface ExternalRequestUrlOptions {
   publicBaseUrl?: string;
   trustProxy?: boolean;
+  trustedProxyCidrs?: string[];
+  remoteAddress?: string | null;
 }
 
 interface MutableRequestUrl {
   raw: Request;
   url: string;
+}
+
+function getRemoteAddressFromBindings(env: unknown): string | null {
+  if (!env || typeof env !== 'object') {
+    return null;
+  }
+
+  const envRecord = env as { incoming?: { socket?: { remoteAddress?: string | null } } };
+  return typeof envRecord.incoming?.socket?.remoteAddress === 'string'
+    ? envRecord.incoming.socket.remoteAddress
+    : null;
 }
 
 function getFirstHeaderValue(value: string | null): string | null {
@@ -107,6 +121,10 @@ export function getExternalRequestUrl(requestUrl: string, headers: Headers, opti
     return url;
   }
 
+  if (!isTrustedProxy(options.remoteAddress, options.trustedProxyCidrs ?? [])) {
+    return url;
+  }
+
   const forwarded = parseForwardedHeader(headers.get('forwarded'));
   const forwardedHost = forwarded.host ?? getFirstHeaderValue(headers.get('x-forwarded-host'));
   const forwardedPort = parseForwardedPort(headers.get('x-forwarded-port'));
@@ -147,7 +165,10 @@ export function normalizeExternalRequestUrl(request: MutableRequestUrl, headers:
 
 export function createExternalRequestUrlMiddleware(options?: ExternalRequestUrlOptions): MiddlewareHandler {
   return async (c, next) => {
-    normalizeExternalRequestUrl(c.req, c.req.raw.headers, options);
+    normalizeExternalRequestUrl(c.req, c.req.raw.headers, {
+      ...options,
+      remoteAddress: getRemoteAddressFromBindings(c.env)
+    });
     await next();
   };
 }

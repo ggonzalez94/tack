@@ -19,7 +19,11 @@ describe('request URL helpers', () => {
       'x-forwarded-proto': 'https'
     });
 
-    expect(getExternalRequestUrl('http://localhost/pins', headers, { trustProxy: true }).toString()).toBe(
+    expect(getExternalRequestUrl('http://localhost/pins', headers, {
+      trustProxy: true,
+      trustedProxyCidrs: ['10.0.0.0/8'],
+      remoteAddress: '10.0.0.4'
+    }).toString()).toBe(
       'https://tack-api-production.up.railway.app:8443/pins'
     );
   });
@@ -29,9 +33,26 @@ describe('request URL helpers', () => {
       forwarded: 'for=203.0.113.10;proto=https;host=tack-api-production.up.railway.app:8443'
     });
 
-    expect(getExternalRequestUrl('http://localhost/pins', headers, { trustProxy: true }).toString()).toBe(
+    expect(getExternalRequestUrl('http://localhost/pins', headers, {
+      trustProxy: true,
+      trustedProxyCidrs: ['10.0.0.0/8'],
+      remoteAddress: '10.0.0.4'
+    }).toString()).toBe(
       'https://tack-api-production.up.railway.app:8443/pins'
     );
+  });
+
+  it('ignores forwarded headers from untrusted proxy addresses', () => {
+    const headers = new Headers({
+      'x-forwarded-host': 'tack-api-production.up.railway.app',
+      'x-forwarded-proto': 'https'
+    });
+
+    expect(getExternalRequestUrl('http://localhost/pins', headers, {
+      trustProxy: true,
+      trustedProxyCidrs: ['10.0.0.0/8'],
+      remoteAddress: '203.0.113.20'
+    }).toString()).toBe('http://localhost/pins');
   });
 
   it('prefers PUBLIC_BASE_URL over forwarded headers', () => {

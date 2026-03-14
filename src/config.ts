@@ -8,6 +8,7 @@ export interface AppConfig {
   delegateUrl: string;
   publicBaseUrl?: string;
   trustProxy: boolean;
+  trustedProxyCidrs: string[];
   walletAuthTokenSecret: string;
   walletAuthTokenIssuer: string;
   walletAuthTokenAudience: string;
@@ -152,6 +153,7 @@ export function getConfig(): AppConfig {
     delegateUrl: process.env.DELEGATE_URL ?? 'http://localhost:8080/ipfs',
     publicBaseUrl: parsePublicBaseUrl(process.env.PUBLIC_BASE_URL),
     trustProxy: parseBoolean(process.env.TRUST_PROXY, false),
+    trustedProxyCidrs: parseList(process.env.TRUSTED_PROXY_CIDRS),
     walletAuthTokenSecret,
     walletAuthTokenIssuer: process.env.WALLET_AUTH_TOKEN_ISSUER ?? 'tack',
     walletAuthTokenAudience: process.env.WALLET_AUTH_TOKEN_AUDIENCE ?? 'tack-owner-api',
