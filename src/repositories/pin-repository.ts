@@ -292,7 +292,7 @@ export class PinRepository {
         `
           SELECT cid, owner, created
           FROM pins
-          WHERE cid = ?
+          WHERE cid = ? AND status = 'pinned'
           ORDER BY created ASC
           LIMIT 1
         `
