@@ -11,6 +11,12 @@ Format:
 
 - None yet.
 
+## [v0.1.2] - 2026-03-15
+
+### Fixed
+- Canonical CID ownership now records the actual successful pin time so `replacePin` no longer backdates ownership to the original request creation timestamp.
+- Retrieval paywall resolution no longer guesses a payout wallet from ambiguous legacy pin history when `cid_owners` is missing, preventing misrouted Taiko USDC settlements after database upgrades.
+
 ## [v0.1.1] - 2026-03-13
 
 ### Changed
@@ -37,6 +43,7 @@ Format:
 ### Docs
 - Added Railway deployment and Taiko x402 smoke runbooks covering volumes, backups, rollback, and go-live validation.
 
-[Unreleased]: https://github.com/ggonzalez94/tack/compare/v0.1.1...HEAD
-[v0.1.1]: https://github.com/ggonzalez94/tack/releases/tag/v0.1.1
-[v0.1.0]: https://github.com/ggonzalez94/tack/releases/tag/v0.1.0
+[Unreleased]: https://github.com/taikoxyz/tack/compare/v0.1.2...HEAD
+[v0.1.2]: https://github.com/taikoxyz/tack/releases/tag/v0.1.2
+[v0.1.1]: https://github.com/taikoxyz/tack/releases/tag/v0.1.1
+[v0.1.0]: https://github.com/taikoxyz/tack/releases/tag/v0.1.0
