@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDb } from '../../src/db';
 import { PinRepository } from '../../src/repositories/pin-repository';
 import type { IpfsClient } from '../../src/services/ipfs-rpc-client';
@@ -20,6 +20,10 @@ describe('PinningService', () => {
   let service: PinningService;
   let replicaA: { pinAdd: ReturnType<typeof vi.fn>; pinRm: ReturnType<typeof vi.fn> };
   let replicaB: { pinAdd: ReturnType<typeof vi.fn>; pinRm: ReturnType<typeof vi.fn> };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   beforeEach(() => {
     db = createDb(':memory:');
@@ -178,5 +182,75 @@ describe('PinningService', () => {
       payTo: wallet,
       priceUsd: 0.003
     });
+  });
+
+  it('uses the successful pin time when claiming ownership for replacements', async () => {
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const created = await service.createPin({ cid: 'bafy-old', owner: wallet });
+
+    vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+    await service.replacePin(created.requestid, { cid: 'bafy-new' }, wallet);
+
+    const cidOwner = db
+      .prepare('SELECT cid, owner, created FROM cid_owners WHERE cid = ?')
+      .get('bafy-new') as { cid: string; owner: string; created: string } | undefined;
+
+    expect(cidOwner).toEqual({
+      cid: 'bafy-new',
+      owner: wallet,
+      created: '2026-01-01T00:10:00.000Z'
+    });
+  });
+
+  it('uses a unique historical owner when cid_owners is missing', async () => {
+    await service.createPin({
+      cid: 'bafy-legacy-single-owner',
+      owner: wallet,
+      meta: { retrievalPrice: '0.002' }
+    });
+    await service.createPin({
+      cid: 'bafy-legacy-single-owner',
+      owner: wallet,
+      meta: { retrievalPrice: '0.003' }
+    });
+
+    db.prepare('DELETE FROM cid_owners WHERE cid = ?').run('bafy-legacy-single-owner');
+
+    expect(service.resolveRetrievalPaymentPolicy('bafy-legacy-single-owner')).toEqual({
+      cid: 'bafy-legacy-single-owner',
+      payTo: wallet,
+      priceUsd: 0.003
+    });
+  });
+
+  it('does not guess a legacy owner when history is ambiguous', async () => {
+    vi.useFakeTimers();
+
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const created = await service.createPin({
+      cid: 'bafy-before-replace',
+      owner: wallet,
+      meta: { retrievalPrice: '0.001' }
+    });
+
+    vi.setSystemTime(new Date('2026-01-01T00:05:00.000Z'));
+    await service.createPin({
+      cid: 'bafy-legacy-ambiguous',
+      owner: otherWallet,
+      meta: { retrievalPrice: '0.009' }
+    });
+
+    vi.setSystemTime(new Date('2026-01-01T00:10:00.000Z'));
+    await service.replacePin(
+      created.requestid,
+      { cid: 'bafy-legacy-ambiguous', meta: { retrievalPrice: '0.001' } },
+      wallet
+    );
+
+    db.prepare('DELETE FROM cid_owners WHERE cid = ?').run('bafy-legacy-ambiguous');
+
+    expect(service.resolveRetrievalPaymentPolicy('bafy-legacy-ambiguous')).toBeNull();
   });
 });

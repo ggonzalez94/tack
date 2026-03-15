@@ -21,6 +21,11 @@ interface DbCidOwnerRow {
   created: string;
 }
 
+interface HistoricalCidOwnerResolution {
+  kind: 'none' | 'unique' | 'ambiguous';
+  row?: DbCidOwnerRow;
+}
+
 export interface PinListFilters {
   cid?: string;
   name?: string;
@@ -40,10 +45,19 @@ export interface PinListResult {
 export class PinRepository {
   constructor(private readonly db: Database.Database) {}
 
-  claimCidOwner(cid: string, owner: string, created: string): void {
-    const historicalOwner = this.findHistoricalCidOwner(cid);
-    const canonicalOwner = historicalOwner?.owner ?? owner;
-    const canonicalCreated = historicalOwner?.created ?? created;
+  claimCidOwner(cid: string, owner: string, claimedAt: string): void {
+    const existing = this.findCidOwnerRow(cid);
+    if (existing) {
+      return;
+    }
+
+    const historicalOwner = this.resolveHistoricalCidOwner(cid);
+    if (historicalOwner.kind === 'ambiguous') {
+      return;
+    }
+
+    const canonicalOwner = historicalOwner.kind === 'unique' ? historicalOwner.row!.owner : owner;
+    const canonicalCreated = historicalOwner.kind === 'unique' ? historicalOwner.row!.created : claimedAt;
 
     this.db
       .prepare(`
@@ -54,15 +68,13 @@ export class PinRepository {
   }
 
   findCidOwner(cid: string): string | null {
-    const row = this.db
-      .prepare('SELECT cid, owner, created FROM cid_owners WHERE cid = ?')
-      .get(cid) as DbCidOwnerRow | undefined;
-
+    const row = this.findCidOwnerRow(cid);
     if (row) {
       return row.owner;
     }
 
-    return this.findHistoricalCidOwner(cid)?.owner ?? null;
+    const historicalOwner = this.resolveHistoricalCidOwner(cid);
+    return historicalOwner.kind === 'unique' ? historicalOwner.row!.owner : null;
   }
 
   create(record: StoredPinRecord): void {
@@ -270,35 +282,42 @@ export class PinRepository {
     };
   }
 
-  private findHistoricalCidOwner(cid: string): DbCidOwnerRow | null {
-    const pinnedRow = this.db
-      .prepare(
-        `
-          SELECT cid, owner, created
-          FROM pins
-          WHERE cid = ? AND status = 'pinned'
-          ORDER BY created ASC
-          LIMIT 1
-        `
-      )
+  private findCidOwnerRow(cid: string): DbCidOwnerRow | null {
+    const row = this.db
+      .prepare('SELECT cid, owner, created FROM cid_owners WHERE cid = ?')
       .get(cid) as DbCidOwnerRow | undefined;
 
-    if (pinnedRow) {
-      return pinnedRow;
+    return row ?? null;
+  }
+
+  private resolveHistoricalCidOwner(cid: string): HistoricalCidOwnerResolution {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            ? AS cid,
+            owner,
+            MIN(updated) AS created
+          FROM pins
+          WHERE cid = ? AND status = 'pinned'
+          GROUP BY owner
+          ORDER BY MIN(updated) ASC, MIN(created) ASC, MIN(rowid) ASC
+          LIMIT 2
+        `
+      )
+      .all(cid, cid) as DbCidOwnerRow[];
+
+    if (rows.length === 0) {
+      return { kind: 'none' };
     }
 
-    const fallbackRow = this.db
-      .prepare(
-        `
-          SELECT cid, owner, created
-          FROM pins
-          WHERE cid = ? AND status = 'pinned'
-          ORDER BY created ASC
-          LIMIT 1
-        `
-      )
-      .get(cid) as DbCidOwnerRow | undefined;
+    if (rows.length > 1) {
+      return { kind: 'ambiguous' };
+    }
 
-    return fallbackRow ?? null;
+    return {
+      kind: 'unique',
+      row: rows[0]
+    };
   }
 }

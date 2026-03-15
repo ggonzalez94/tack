@@ -121,13 +121,14 @@ export class PinningService {
 
     try {
       await this.ipfsClient.pinAdd(record.cid);
-      this.repository.claimCidOwner(record.cid, record.owner, record.created);
+      const claimedAt = new Date().toISOString();
+      this.repository.claimCidOwner(record.cid, record.owner, claimedAt);
       const replicaResults = await this.pinOnReplicas(record.cid);
       const updated = {
         ...record,
         status: 'pinned' as const,
         info: this.buildReplicationInfo(replicaResults),
-        updated: new Date().toISOString()
+        updated: claimedAt
       };
       this.repository.update(record.requestid, updated);
       return updated;
@@ -184,13 +185,14 @@ export class PinningService {
 
     try {
       await this.ipfsClient.pinAdd(next.cid);
-      this.repository.claimCidOwner(next.cid, next.owner, next.created);
+      const claimedAt = new Date().toISOString();
+      this.repository.claimCidOwner(next.cid, next.owner, claimedAt);
       const replicaResults = await this.pinOnReplicas(next.cid);
       const pinned = {
         ...next,
         status: 'pinned' as const,
         info: this.buildReplicationInfo(replicaResults),
-        updated: new Date().toISOString()
+        updated: claimedAt
       };
       this.repository.update(requestid, pinned);
       return pinned;
