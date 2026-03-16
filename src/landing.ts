@@ -522,7 +522,7 @@ export function landingPageHtml(origin: string): string {
         <div class="section-label">Integrate</div>
         <div class="section-title">One endpoint. Give it to your agent.</div>
         <p style="font-size:16px;color:var(--surface-500);margin-bottom:40px;">
-          Tell your AI agent to use this URL for IPFS storage. It handles the rest &mdash; pricing, payment, pinning. Standard HTTP + <a href="https://www.x402.org/" target="_blank" style="color:var(--taiko-200);">x402</a>, no SDK needed.
+          Tell your AI agent to use this URL for IPFS storage. It handles the rest &mdash; pricing, payment, pinning. Standard HTTP + <a href="https://www.x402.org/" target="_blank" style="color:var(--taiko-200);">x402</a>. Use <code class="mono">@x402/fetch</code> to handle payments automatically, or implement the protocol manually.
         </p>
       </div>
 
