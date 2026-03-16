@@ -1,6 +1,6 @@
 {
   "name": "tack",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Pin to IPFS, pay with your wallet. No account needed.",
   "scripts": {
