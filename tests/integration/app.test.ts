@@ -84,6 +84,45 @@ const mockFacilitator: FacilitatorClient = {
   }
 };
 
+function createInvalidVerificationFacilitator(invalidReason = 'invalid_payment'): FacilitatorClient {
+  return {
+    ...mockFacilitator,
+    verify(): Promise<{ isValid: false; invalidReason: string; payer: string }> {
+      return Promise.resolve({
+        isValid: false,
+        invalidReason,
+        payer: walletA
+      });
+    }
+  };
+}
+
+function createSettlementFailureFacilitator(
+  errorReason = 'settle failed',
+  errorMessage = 'The payment could not be settled on-chain.'
+): FacilitatorClient {
+  return {
+    ...mockFacilitator,
+    settle(paymentPayload: PaymentPayload, requirements: PaymentRequirements): Promise<{
+      success: false;
+      errorReason: string;
+      errorMessage: string;
+      transaction: string;
+      network: string;
+      payer: string;
+    }> {
+      return Promise.resolve({
+        success: false,
+        errorReason,
+        errorMessage,
+        transaction: '',
+        network: requirements.network,
+        payer: extractWallet(paymentPayload)
+      });
+    }
+  };
+}
+
 function ownerAuthHeaders(token: string): Record<string, string> {
   return {
     authorization: `Bearer ${token}`
@@ -118,6 +157,16 @@ function buildPaymentPayload(walletAddress: string, paymentRequiredHeader: strin
   };
 
   return encodePaymentSignatureHeader(paymentPayload);
+}
+
+function buildForgedPaymentSignatureHeader(walletAddress: string): string {
+  return Buffer.from(JSON.stringify({
+    payload: {
+      authorization: {
+        from: walletAddress
+      }
+    }
+  })).toString('base64');
 }
 
 async function paidRequest(
@@ -459,14 +508,105 @@ describe('API integration', () => {
       endpoint: string;
       protocol: string;
       capabilities: { pinningApi: { endpoints: string[] } };
-      pricing: { retrieval: { metadataField: string }; pinning: { protocol: string } };
+      pricing: { retrieval: { metadataField: string }; pinning: { protocol: string; spec: string } };
+      authentication: { walletAuthToken: { description: string; usage: string } };
+      links: { x402Spec: string; x402ClientSdk: string; ipfsPinningSpec: string };
     };
 
     expect(agentCard.protocol).toBe('a2a');
     expect(agentCard.endpoint).toBe('http://localhost');
     expect(agentCard.capabilities.pinningApi.endpoints).toContain('/pins');
     expect(agentCard.pricing.pinning.protocol).toBe('x402');
+    expect(agentCard.pricing.pinning.spec).toBe('https://www.x402.org/');
     expect(agentCard.pricing.retrieval.metadataField).toBe('meta.retrievalPrice');
+    expect(agentCard.authentication.walletAuthToken.usage).toBe('Authorization: Bearer <token>');
+    expect(agentCard.links.x402Spec).toBe('https://www.x402.org/');
+    expect(agentCard.links.x402ClientSdk).toBe('https://www.npmjs.com/package/@x402/fetch');
+    expect(agentCard.links.ipfsPinningSpec).toBe('https://ipfs.github.io/pinning-services-api-spec/');
+  });
+
+  it('includes X-Request-Id and enriched body in 402 responses', async () => {
+    const unpaid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cid: 'bafy-unpaid' })
+      })
+    );
+
+    expect(unpaid.status).toBe(402);
+    expect(unpaid.headers.get('x-request-id')).toBeTruthy();
+    const body = (await unpaid.json()) as { error: string; protocol: { spec: string }; client: { package: string } };
+    expect(body.error).toBe('Payment required');
+    expect(body.protocol.spec).toBe('https://www.x402.org/');
+    expect(body.client.package).toBe('@x402/fetch');
+  });
+
+  it('returns an enriched body for invalid decodable payment proofs', async () => {
+    const invalidPaymentApp = buildApp({
+      paymentMiddleware: createX402PaymentMiddleware(paymentConfig, createInvalidVerificationFacilitator('invalid_payment_signature'))
+    });
+
+    const unpaid = await invalidPaymentApp.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cid: 'bafy-invalid-payment' })
+      })
+    );
+    expect(unpaid.status).toBe(402);
+
+    const paymentRequiredHeader = unpaid.headers.get('payment-required');
+    expect(paymentRequiredHeader).toBeTruthy();
+
+    const response = await invalidPaymentApp.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'payment-signature': buildPaymentPayload(walletA, paymentRequiredHeader!)
+        },
+        body: JSON.stringify({ cid: 'bafy-invalid-payment' })
+      })
+    );
+
+    expect(response.status).toBe(402);
+    expect(response.headers.get('payment-required')).toBeTruthy();
+    const body = (await response.json()) as {
+      error: string;
+      paymentError: string;
+      protocol: { spec: string };
+      client: { package: string };
+    };
+    expect(body.error).toBe('Payment verification failed');
+    expect(body.paymentError).toBe('invalid_payment_signature');
+    expect(body.protocol.spec).toBe('https://www.x402.org/');
+    expect(body.client.package).toBe('@x402/fetch');
+  });
+
+  it('returns the settlement failure body when on-chain settlement fails', async () => {
+    const settlementFailureApp = buildApp({
+      paymentMiddleware: createX402PaymentMiddleware(
+        paymentConfig,
+        createSettlementFailureFacilitator('settle failed', 'facilitator could not settle')
+      )
+    });
+
+    const response = await paidRequest(settlementFailureApp, 'http://localhost/pins', walletA, () => ({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cid: 'bafy-settlement-failure' })
+    }));
+
+    expect(response.status).toBe(402);
+    expect(response.headers.get('payment-response')).toBeTruthy();
+    expect(response.headers.get('x-request-id')).toBeTruthy();
+    expect(await response.json()).toEqual({
+      error: 'Payment settlement failed',
+      reason: 'settle failed',
+      message: 'facilitator could not settle',
+      spec: 'https://www.x402.org/'
+    });
   });
 
   it('uses forwarded host and proto in the AgentCard when trustProxy is enabled', async () => {
@@ -553,6 +693,30 @@ describe('API integration', () => {
     const second = await limitedApp.request('http://localhost/health');
     expect(second.status).toBe(429);
     expect(second.headers.get('retry-after')).toBeTruthy();
+  });
+
+  it('rate limits unverified payment headers by IP instead of the claimed wallet', async () => {
+    const limitedApp = buildApp({
+      rateLimiter: new InMemoryRateLimiter(1, 60_000)
+    });
+
+    const first = await limitedApp.request(
+      new Request('http://localhost/health', {
+        headers: {
+          'payment-signature': buildForgedPaymentSignatureHeader(walletA)
+        }
+      })
+    );
+    expect(first.status).toBe(200);
+
+    const second = await limitedApp.request(
+      new Request('http://localhost/health', {
+        headers: {
+          'payment-signature': buildForgedPaymentSignatureHeader(walletB)
+        }
+      })
+    );
+    expect(second.status).toBe(429);
   });
 
   it('does not trust forwarded IP headers by default', async () => {

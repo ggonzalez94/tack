@@ -522,7 +522,7 @@ export function landingPageHtml(origin: string): string {
         <div class="section-label">Integrate</div>
         <div class="section-title">One endpoint. Give it to your agent.</div>
         <p style="font-size:16px;color:var(--surface-500);margin-bottom:40px;">
-          Tell your AI agent to use this URL for IPFS storage. It handles the rest &mdash; pricing, payment, pinning. Standard HTTP + <a href="https://www.x402.org/" target="_blank" style="color:var(--taiko-200);">x402</a>, no SDK needed.
+          Tell your AI agent to use this URL for IPFS storage. It handles the rest &mdash; pricing, payment, pinning. Standard HTTP + <a href="https://www.x402.org/" target="_blank" style="color:var(--taiko-200);">x402</a>. Use <code class="mono">@x402/fetch</code> to handle payments automatically, or implement the protocol manually.
         </p>
       </div>
 
@@ -556,7 +556,7 @@ export function landingPageHtml(origin: string): string {
       <div class="code-grid">
         <div class="code-details">
           <h3>If you want the details</h3>
-          <p>Under the hood it's standard HTTP with x402 machine-readable payments. POST a pin request, get a 402 with the price, pay in USDC, done.</p>
+          <p>Use <code class="mono">@x402/fetch</code> to wrap your fetch &mdash; it reads the 402 response, signs the USDC payment, and retries automatically. Or handle x402 manually if you prefer.</p>
           <div class="code-detail-item">
             <div class="code-detail-label">Protocol</div>
             <div class="code-detail-value mono">IPFS Pinning Service API + x402</div>
@@ -578,29 +578,23 @@ export function landingPageHtml(origin: string): string {
             <div class="code-dot"></div>
             <span class="code-filename">agent.ts</span>
           </div>
-          <pre><code class="mono">// 1. Try to pin &mdash; server responds 402 with price
-const res = await fetch("${o}/pins", {
+          <pre><code class="mono">import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
+import { ExactEvmScheme } from "@x402/evm";
+
+const x402Fetch = wrapFetchWithPaymentFromConfig(fetch, {
+  schemes: [{ network: "eip155:167000", client: new ExactEvmScheme(wallet) }],
+});
+
+// Pin a CID &mdash; x402 payment is handled automatically
+const res = await x402Fetch("${o}/pins", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ cid: "Qm..." }),
 });
-// res.status === 402
-// res.headers has x402 payment requirements
+// res.status === 202
+// res.headers["x-wallet-auth-token"] &rarr; save for owner requests
 
-// 2. Pay the exact USDC amount via x402
-//    (your x402 client handles this automatically)
-
-// 3. Re-send with payment proof &mdash; pin created
-const pin = await x402Client.fetch("${o}/pins", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ cid: "Qm..." }),
-});
-// pin.status === 202
-// pin.headers["x-wallet-auth-token"] &rarr; use for
-// subsequent owner requests (list, delete)
-
-// 4. Retrieve content &mdash; free by default
+// Retrieve content &mdash; free by default
 const content = await fetch("${o}/ipfs/Qm...");
 </code></pre>
         </div>

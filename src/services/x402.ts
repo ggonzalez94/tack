@@ -1,11 +1,12 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { paymentMiddlewareFromHTTPServer } from '@x402/hono';
+import { HonoAdapter } from '@x402/hono';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
-import { decodePaymentSignatureHeader } from '@x402/core/http';
+import { decodePaymentRequiredHeader, decodePaymentSignatureHeader } from '@x402/core/http';
 import {
   HTTPFacilitatorClient,
   type FacilitatorClient,
   type HTTPRequestContext,
+  type HTTPResponseInstructions,
   type RoutesConfig,
   x402HTTPResourceServer,
   x402ResourceServer
@@ -51,6 +52,7 @@ export interface WalletAuthToken {
 
 export const WALLET_AUTH_TOKEN_RESPONSE_HEADER = 'x-wallet-auth-token';
 export const WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER = 'x-wallet-auth-token-expires-at';
+export const X402_SPEC_URL = 'https://www.x402.org/';
 
 export interface RetrievalPaymentRequirement {
   payTo: string;
@@ -66,6 +68,10 @@ export interface X402PaymentMiddlewareOptions {
 }
 
 const MAX_WALLET_AUTH_CLOCK_SKEW_SECONDS = 60;
+const PAYMENT_REQUIRED_HEADER = 'PAYMENT-REQUIRED';
+const RECOMMENDED_CLIENT_INSTALL = 'npm install @x402/fetch @x402/evm';
+const RECOMMENDED_CLIENT_PACKAGE = '@x402/fetch';
+type PaymentErrorStatus = 402 | 403 | 412;
 
 function parsePositiveInteger(raw: string | undefined): number | undefined {
   if (!raw) {
@@ -460,6 +466,229 @@ async function resolveRetrievalRequirement(
   return resolver(cid);
 }
 
+function buildRecommendedClientInfo() {
+  return {
+    package: RECOMMENDED_CLIENT_PACKAGE,
+    install: RECOMMENDED_CLIENT_INSTALL,
+    usage: 'Wrap fetch with wrapFetchWithPaymentFromConfig() — it reads the Payment-Required header and handles payment automatically.'
+  };
+}
+
+function buildProtocolInfo(x402Version = 2) {
+  return {
+    name: 'x402',
+    version: x402Version,
+    spec: X402_SPEC_URL
+  };
+}
+
+function makeUnpaidResponseBody(description: string) {
+  return () => ({
+    contentType: 'application/json' as const,
+    body: {
+      error: 'Payment required',
+      description,
+      protocol: buildProtocolInfo(),
+      client: buildRecommendedClientInfo(),
+      note: 'Decode the base64 Payment-Required response header for full payment requirements. If your payment fails, the error reason is in that same header.'
+    }
+  });
+}
+
+function makeSettlementFailedResponseBody() {
+  return (_context: HTTPRequestContext, settleResult: { errorReason?: string; errorMessage?: string }) => ({
+    contentType: 'application/json' as const,
+    body: {
+      error: 'Payment settlement failed',
+      reason: settleResult.errorReason,
+      message: settleResult.errorMessage ?? 'The payment could not be settled on-chain.',
+      spec: X402_SPEC_URL
+    }
+  });
+}
+
+function getResponseHeader(headers: Record<string, string>, headerName: string): string | undefined {
+  const direct = headers[headerName];
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  const expected = headerName.toLowerCase();
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() === expected) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function isEmptyJsonBody(body: unknown): boolean {
+  if (body === undefined || body === null) {
+    return true;
+  }
+
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    return false;
+  }
+
+  return Object.keys(body as Record<string, unknown>).length === 0;
+}
+
+function createVerificationFailureResponseBody(response: HTTPResponseInstructions): Record<string, unknown> {
+  const paymentRequiredHeader = getResponseHeader(response.headers, PAYMENT_REQUIRED_HEADER);
+
+  try {
+    if (paymentRequiredHeader) {
+      const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader);
+      const paymentError = paymentRequired.error;
+      const allowanceRequired = paymentError === 'permit2_allowance_required';
+
+      return {
+        error: allowanceRequired ? 'Additional token approval required' : 'Payment verification failed',
+        paymentError: paymentError ?? 'payment_verification_failed',
+        protocol: buildProtocolInfo(paymentRequired.x402Version),
+        client: buildRecommendedClientInfo(),
+        hint: allowanceRequired
+          ? 'Decode the base64 Payment-Required header for the allowance details, approve the required token or Permit2 allowance, and retry.'
+          : 'Decode the base64 Payment-Required header for the exact verification error and refreshed payment requirements.'
+      };
+    }
+  } catch {
+    // Fall back to a generic body if the upstream header is malformed.
+  }
+
+  return {
+    error: 'Payment verification failed',
+    paymentError: 'payment_verification_failed',
+    protocol: buildProtocolInfo(),
+    client: buildRecommendedClientInfo(),
+    hint: 'Decode the base64 Payment-Required header for the exact verification error and refreshed payment requirements.'
+  };
+}
+
+function createUnexpectedSettlementFailureResponseBody(): Record<string, unknown> {
+  return {
+    error: 'Payment settlement failed',
+    message: 'An unexpected settlement error occurred after the protected resource was generated.',
+    spec: X402_SPEC_URL
+  };
+}
+
+function resolvePaymentErrorBody(response: HTTPResponseInstructions, context: HTTPRequestContext): unknown {
+  if (response.isHtml || !context.paymentHeader || !isEmptyJsonBody(response.body)) {
+    return response.body ?? {};
+  }
+
+  if (response.status !== 402 && response.status !== 412) {
+    return response.body ?? {};
+  }
+
+  if (!getResponseHeader(response.headers, PAYMENT_REQUIRED_HEADER)) {
+    return response.body ?? {};
+  }
+
+  return createVerificationFailureResponseBody(response);
+}
+
+function createPaymentMiddleware(httpServer: x402HTTPResourceServer): MiddlewareHandler {
+  let initPromise: Promise<void> | null = httpServer.initialize();
+
+  return async (c, next) => {
+    const adapter = new HonoAdapter(c);
+    const context: HTTPRequestContext = {
+      adapter,
+      path: c.req.path,
+      method: c.req.method,
+      paymentHeader: adapter.getHeader('payment-signature') || adapter.getHeader('x-payment')
+    };
+
+    if (!httpServer.requiresPayment(context)) {
+      return next();
+    }
+
+    if (initPromise) {
+      await initPromise;
+      initPromise = null;
+    }
+
+    const result = await httpServer.processHTTPRequest(context);
+
+    switch (result.type) {
+      case 'no-payment-required':
+        return next();
+      case 'payment-error': {
+        const { response } = result;
+        const body = resolvePaymentErrorBody(response, context);
+
+        Object.entries(response.headers).forEach(([key, value]) => {
+          c.header(key, value);
+        });
+
+        if (response.isHtml) {
+          const html = typeof response.body === 'string' ? response.body : '';
+          return c.html(html, response.status as PaymentErrorStatus);
+        }
+
+        return c.json((body ?? {}) as Record<string, unknown>, response.status as PaymentErrorStatus);
+      }
+      case 'payment-verified': {
+        const { paymentPayload, paymentRequirements, declaredExtensions } = result;
+
+        await next();
+
+        let res = c.res;
+        if (res.status >= 400) {
+          return;
+        }
+
+        const responseBody = Buffer.from(await res.clone().arrayBuffer());
+        c.res = undefined;
+
+        try {
+          const settleResult = await httpServer.processSettlement(
+            paymentPayload,
+            paymentRequirements,
+            declaredExtensions,
+            { request: context, responseBody }
+          );
+
+          if (!settleResult.success) {
+            const { response } = settleResult;
+            const body = response.isHtml
+              ? (typeof response.body === 'string' ? response.body : '')
+              : JSON.stringify(response.body ?? {});
+
+            const mergedHeaders = new Headers(res.headers);
+            Object.entries(response.headers).forEach(([key, value]) => {
+              mergedHeaders.set(key, value);
+            });
+
+            res = new Response(body, {
+              status: response.status,
+              headers: mergedHeaders
+            });
+          } else {
+            Object.entries(settleResult.headers).forEach(([key, value]) => {
+              res.headers.set(key, value);
+            });
+          }
+        } catch (error) {
+          console.error(error);
+          const fallbackHeaders = new Headers(res.headers);
+          res = new Response(JSON.stringify(createUnexpectedSettlementFailureResponseBody()), {
+            status: 402,
+            headers: fallbackHeaders
+          });
+        }
+
+        c.res = res;
+        return;
+      }
+    }
+  };
+}
+
 export function createX402PaymentMiddleware(
   config: X402PaymentConfig,
   facilitatorClient?: FacilitatorClient,
@@ -486,7 +715,9 @@ export function createX402PaymentMiddleware(
         }
       },
       description: 'Create IPFS pin',
-      mimeType: 'application/json'
+      mimeType: 'application/json',
+      unpaidResponseBody: makeUnpaidResponseBody('Pin a CID to IPFS.'),
+      settlementFailedResponseBody: makeSettlementFailedResponseBody()
     },
     'POST /upload': {
       accepts: {
@@ -501,7 +732,9 @@ export function createX402PaymentMiddleware(
         }
       },
       description: 'Upload content to IPFS',
-      mimeType: 'application/json'
+      mimeType: 'application/json',
+      unpaidResponseBody: makeUnpaidResponseBody('Upload content to IPFS and pin it.'),
+      settlementFailedResponseBody: makeSettlementFailedResponseBody()
     }
   };
 
@@ -547,5 +780,5 @@ export function createX402PaymentMiddleware(
     });
   }
 
-  return paymentMiddlewareFromHTTPServer(httpServer);
+  return createPaymentMiddleware(httpServer);
 }
