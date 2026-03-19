@@ -94,6 +94,15 @@ const mppMiddleware: MiddlewareHandler | undefined = mppx
   ? createMppPaymentMiddleware({
       mppx,
       priceFn: (c) => {
+        // For retrieval routes, check if content is paywalled
+        const cidParam = c.req.param('cid');
+        if (cidParam && c.req.method === 'GET') {
+          const policy = pinningService.resolveRetrievalPaymentPolicy(cidParam);
+          if (!policy || policy.priceUsd <= 0) return null; // Free retrieval
+          return String(policy.priceUsd);
+        }
+
+        // For pin/upload routes, price based on content size
         const sizeBytes = Number(
           c.req.header('x-content-size-bytes') ?? c.req.header('content-length') ?? '0'
         );
@@ -116,10 +125,19 @@ const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
 
       // If x402 returned 402, add the MPP challenge header too
       if (c.res.status === 402 && !c.req.header('Authorization')?.startsWith('Payment ')) {
-        const sizeBytes = Number(
-          c.req.header('x-content-size-bytes') ?? c.req.header('content-length') ?? '0'
-        );
-        const priceUsd = String(calculatePriceUsd(sizeBytes, x402PricingConfig));
+        // Calculate price the same way as the per-route middleware
+        let priceUsd: string;
+        const cidParam = c.req.param('cid');
+        if (cidParam && c.req.method === 'GET') {
+          const policy = pinningService.resolveRetrievalPaymentPolicy(cidParam);
+          if (!policy || policy.priceUsd <= 0) return; // Free retrieval, no challenge needed
+          priceUsd = String(policy.priceUsd);
+        } else {
+          const sizeBytes = Number(
+            c.req.header('x-content-size-bytes') ?? c.req.header('content-length') ?? '0'
+          );
+          priceUsd = String(calculatePriceUsd(sizeBytes, x402PricingConfig));
+        }
         const mppResult = await mppx.charge({ amount: priceUsd })(c.req.raw);
 
         if (mppResult.status === 402) {
