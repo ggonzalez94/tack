@@ -344,6 +344,43 @@ export class PinningService {
     };
   }
 
+  async sweepExpiredPins(batchSize = 50): Promise<{ expiredCount: number; failedCount: number; skippedUnpinCount: number }> {
+    const now = new Date().toISOString();
+    const expired = this.repository.findExpired(batchSize, now);
+
+    let expiredCount = 0;
+    let failedCount = 0;
+    let skippedUnpinCount = 0;
+
+    for (const pin of expired) {
+      const activeCount = this.repository.countActivePinsForCid(pin.cid, now);
+      const shouldUnpin = activeCount === 0;
+
+      if (shouldUnpin) {
+        try {
+          await this.ipfsClient.pinRm(pin.cid);
+          await this.unpinOnReplicas(pin.cid);
+        } catch {
+          failedCount++;
+          continue;
+        }
+      } else {
+        skippedUnpinCount++;
+      }
+
+      this.repository.delete(pin.requestid);
+      this.repository.deleteCidOwnerIfOrphaned(pin.cid);
+
+      if (shouldUnpin) {
+        this.contentCache?.delete(pin.cid);
+      }
+
+      expiredCount++;
+    }
+
+    return { expiredCount, failedCount, skippedUnpinCount };
+  }
+
   listPins(input: ListPinsInput): { count: number; results: StoredPinRecord[] } {
     const filters: PinListFilters = {
       cid: input.cid,
