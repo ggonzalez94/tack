@@ -14,11 +14,9 @@ import {
 import type { MiddlewareHandler } from 'hono';
 import type { PaymentPayload } from '@x402/core/types';
 import { logger } from './logger';
+import { calculatePriceUsd, usdToAssetAmount } from './payment/pricing.js';
 
-interface AssetAmountPrice {
-  amount: string;
-  asset: string;
-}
+export { calculatePriceUsd } from './payment/pricing.js';
 
 export interface X402PaymentConfig {
   facilitatorUrl: string;
@@ -139,29 +137,6 @@ function resolveUploadSizeBytes(context: HTTPRequestContext): number {
   );
 }
 
-export function calculatePriceUsd(sizeBytes: number, config: Pick<X402PaymentConfig, 'basePriceUsd' | 'pricePerMbUsd' | 'maxPriceUsd'>): number {
-  const base = config.basePriceUsd;
-  const max = config.maxPriceUsd;
-  const perMb = config.pricePerMbUsd;
-
-  if (sizeBytes <= 1_000_000) {
-    return Math.min(base, max);
-  }
-
-  const additionalBytes = sizeBytes - 1_000_000;
-  const additionalMegabytes = Math.ceil(additionalBytes / 1_000_000);
-  return Math.min(base + additionalMegabytes * perMb, max);
-}
-
-function usdToAssetAmount(usdAmount: number, assetAddress: string, assetDecimals: number): AssetAmountPrice {
-  const factor = 10 ** assetDecimals;
-  const scaled = Math.max(1, Math.round((usdAmount + Number.EPSILON) * factor));
-
-  return {
-    amount: String(scaled),
-    asset: assetAddress
-  };
-}
 
 function normalizeWalletAddress(raw: string | undefined): string | null {
   if (!raw) {
