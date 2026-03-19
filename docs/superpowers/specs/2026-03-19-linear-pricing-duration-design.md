@@ -19,7 +19,7 @@ price = max(minPrice, fileSizeGB * ratePerGbMonth * durationMonths)
 - `fileSizeGB = sizeBytes / 1,073,741,824`
 - Default rate: $0.05/GB/month
 - Min price: $0.001 (floor for tiny files)
-- Max price: $10.00 (sanity guard)
+- Max price: $50.00 (sanity guard — must exceed max realistic pin: 10GB × 24mo = $12)
 - Default duration: 1 month
 
 Examples at $0.05/GB/month:
@@ -38,7 +38,7 @@ Replaces the old `X402_BASE_PRICE_USD`, `X402_PRICE_PER_MB_USD`, `X402_MAX_PRICE
 |---------|---------|---------|
 | `X402_RATE_PER_GB_MONTH_USD` | 0.05 | Linear rate |
 | `X402_MIN_PRICE_USD` | 0.001 | Price floor |
-| `X402_MAX_PRICE_USD` | 10.0 | Sanity cap |
+| `X402_MAX_PRICE_USD` | 50.0 | Sanity cap (must exceed max realistic pin) |
 | `X402_DEFAULT_DURATION_MONTHS` | 1 | Default if header absent |
 | `X402_MAX_DURATION_MONTHS` | 24 | Maximum allowed duration |
 
@@ -51,7 +51,7 @@ Header: `X-Pin-Duration-Months: <integer>`
 - Parsed in the x402 price resolver (same pattern as `X-Content-Size-Bytes`)
 - Range: 1 to `X402_MAX_DURATION_MONTHS`, default `X402_DEFAULT_DURATION_MONTHS`
 - Invalid/missing values fall back to default
-- Works for both `POST /pins` and `POST /upload`
+- Applies to `POST /pins` only (see note on uploads below)
 
 ### Schema Change
 
@@ -68,9 +68,9 @@ CREATE INDEX IF NOT EXISTS idx_pins_expires_at ON pins(expires_at);
 
 ### Where `expires_at` Is Set
 
-- `POST /pins` -- from header duration
-- `POST /upload` -- from header duration
-- `POST /pins/:requestid` (replace) -- inherits the original pin's `expires_at`
+- `POST /pins` -- computed from header duration
+- `POST /pins/:requestid` (replace) -- inherits the original pin's `expires_at` (replace is free / wallet-auth only, no new payment)
+- `POST /upload` -- does **not** set `expires_at`. The upload route creates no pin record (it calls `ipfs add` and returns a CID). Agents are expected to follow up with `POST /pins` to create a tracked pin with expiry. The upload x402 price covers upload cost only (size-based, no duration component).
 
 ### Expiry Sweep
 
@@ -81,20 +81,22 @@ In-process `setInterval` timer in `index.ts`:
 
 Sweep logic (new method on `PinningService`):
 
-1. Query `findExpired(limit: 50)`: `WHERE expires_at IS NOT NULL AND expires_at <= now`
+1. Query `findExpired(limit: 50)`: `WHERE expires_at IS NOT NULL AND expires_at <= ?` with `new Date().toISOString()` as the comparator. `ORDER BY expires_at ASC` (oldest-expired first).
 2. For each expired pin:
-   - `ipfsClient.pinRm(cid)` -- best-effort
-   - Unpin from replicas -- best-effort
+   - **CID safety check**: only call `ipfsClient.pinRm(cid)` if no other non-expired pin records reference the same CID. Query: count of pins with same CID where `expires_at IS NULL OR expires_at > now`. If count > 0, skip Kubo unpin but still delete this record.
+   - If Kubo unpin needed: `ipfsClient.pinRm(cid)` + replica unpin -- best-effort
    - Delete pin record from DB
-   - Evict from content cache
-3. If unpin fails, skip that pin (retry next cycle). Only delete DB record if unpin succeeds.
-4. Log summary: `{ expiredCount, failedCount }`
+   - Clean up orphaned `cid_owners` entry if no other pin records reference this CID
+   - Evict from content cache (only if Kubo unpin was performed)
+3. If unpin fails, skip that pin (retry next cycle). Only delete DB record if unpin succeeds or was skipped (shared CID).
+4. Log summary: `{ expiredCount, failedCount, skippedUnpinCount, durationMs }`
 
 Design decisions:
 - Hard delete immediately (no soft-delete "expired" status, no 30-day retention)
 - No intermediate "expired" status -- pin is alive or gone
 - Batch size 50 to avoid monopolizing DB/Kubo
 - Legacy pins with `NULL` `expires_at` are never swept
+- Sweep timer is `.unref()`'d and `clearInterval`'d during shutdown to prevent conflicts with DB close
 
 ### API Surface
 
@@ -154,7 +156,7 @@ Removes old `baseUsd`/`perMbUsd`/`maxUsd` fields.
 | File | Changes |
 |------|---------|
 | `src/config.ts` | Replace 3 pricing env vars with 5 new ones, update `AppConfig` |
-| `src/services/x402.ts` | New `calculatePriceUsd()` (takes duration), parse `X-Pin-Duration-Months`, update `X402PaymentConfig`, pricing info in 402 body |
+| `src/services/x402.ts` | New `calculatePriceUsd()` (takes duration), parse `X-Pin-Duration-Months` for pins route only, update `X402PaymentConfig`, pricing info in 402 body, fix retrieval price fallback (`basePriceUsd` -> `minPriceUsd`) |
 | `src/types.ts` | Add `expires_at: string \| null` to `StoredPinRecord` |
 | `src/db.ts` | ALTER TABLE, add index |
 | `src/repositories/pin-repository.ts` | Persist/query `expires_at`, add `findExpired(limit)` |
@@ -172,8 +174,10 @@ No new files.
 
 - Unit test `calculatePriceUsd` across size/duration combos
 - Unit test sweep: mock Kubo + repo, verify unpin + delete + cache eviction
+- Unit test sweep: shared CID -- verify Kubo unpin is skipped when another active pin exists
+- Unit test sweep: orphaned `cid_owners` cleanup
 - Unit test: `NULL` `expires_at` (legacy pins) survives sweep
-- Unit test: invalid duration header falls back to default
+- Unit test: duration header boundary values (0, -1, max+1, non-integer, missing)
 - Integration test: full request cycle with duration header, verify `expiresAt` in response
 
 ## Out of Scope
