@@ -117,6 +117,31 @@ const server = serve(
   }
 );
 
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
+const SWEEP_STARTUP_DELAY_MS = 30 * 1000; // 30 seconds
+
+async function runSweep(): Promise<void> {
+  const startTime = Date.now();
+  try {
+    const result = await pinningService.sweepExpiredPins();
+    if (result.expiredCount > 0 || result.failedCount > 0) {
+      logger.info({ ...result, durationMs: Date.now() - startTime }, 'expiry sweep completed');
+    }
+  } catch (error) {
+    logger.error({ err: error, durationMs: Date.now() - startTime }, 'expiry sweep failed');
+  }
+}
+
+const sweepStartupTimer = setTimeout(() => {
+  void runSweep();
+}, SWEEP_STARTUP_DELAY_MS);
+sweepStartupTimer.unref();
+
+const sweepInterval = setInterval(() => {
+  void runSweep();
+}, SWEEP_INTERVAL_MS);
+sweepInterval.unref();
+
 let shuttingDown = false;
 
 const shutdown = (signal: NodeJS.Signals): void => {
@@ -126,6 +151,9 @@ const shutdown = (signal: NodeJS.Signals): void => {
 
   shuttingDown = true;
   logger.info({ signal }, 'received shutdown signal');
+
+  clearTimeout(sweepStartupTimer);
+  clearInterval(sweepInterval);
 
   const forceExitTimer = setTimeout(() => {
     logger.error({ timeoutMs: 10000 }, 'shutdown timed out, forcing exit');
