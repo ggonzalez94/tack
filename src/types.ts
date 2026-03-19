@@ -19,6 +19,7 @@ export interface StoredPinRecord {
   owner: string;
   created: string;
   updated: string;
+  expires_at: string | null;
 }
 
 export interface PinStatusResponse {

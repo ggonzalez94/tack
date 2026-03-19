@@ -25,9 +25,11 @@ export interface AppConfig {
   x402UsdcAssetDecimals: number;
   x402UsdcDomainName: string;
   x402UsdcDomainVersion: string;
-  x402BasePriceUsd: number;
-  x402PricePerMbUsd: number;
+  x402RatePerGbMonthUsd: number;
+  x402MinPriceUsd: number;
   x402MaxPriceUsd: number;
+  x402DefaultDurationMonths: number;
+  x402MaxDurationMonths: number;
 }
 
 const PLACEHOLDER_EVM_ADDRESSES = new Set([
@@ -55,6 +57,19 @@ function parseNumber(value: string | undefined, fallback: number, fieldName: str
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     throw new Error(`Invalid numeric value for ${fieldName}`);
+  }
+
+  return parsed;
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number, fieldName: string): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${fieldName} must be a positive integer`);
   }
 
   return parsed;
@@ -182,9 +197,11 @@ export function getConfig(): AppConfig {
     x402UsdcAssetDecimals: parseNumber(process.env.X402_USDC_ASSET_DECIMALS, 6, 'X402_USDC_ASSET_DECIMALS'),
     x402UsdcDomainName: process.env.X402_USDC_DOMAIN_NAME ?? 'USD Coin',
     x402UsdcDomainVersion: process.env.X402_USDC_DOMAIN_VERSION ?? '2',
-    x402BasePriceUsd: parseNumber(process.env.X402_BASE_PRICE_USD, 0.001, 'X402_BASE_PRICE_USD'),
-    x402PricePerMbUsd: parseNumber(process.env.X402_PRICE_PER_MB_USD, 0.001, 'X402_PRICE_PER_MB_USD'),
-    x402MaxPriceUsd: parseNumber(process.env.X402_MAX_PRICE_USD, 0.01, 'X402_MAX_PRICE_USD')
+    x402RatePerGbMonthUsd: parseNumber(process.env.X402_RATE_PER_GB_MONTH_USD, 0.05, 'X402_RATE_PER_GB_MONTH_USD'),
+    x402MinPriceUsd: parseNumber(process.env.X402_MIN_PRICE_USD, 0.001, 'X402_MIN_PRICE_USD'),
+    x402MaxPriceUsd: parseNumber(process.env.X402_MAX_PRICE_USD, 50.0, 'X402_MAX_PRICE_USD'),
+    x402DefaultDurationMonths: parsePositiveInteger(process.env.X402_DEFAULT_DURATION_MONTHS, 1, 'X402_DEFAULT_DURATION_MONTHS'),
+    x402MaxDurationMonths: parsePositiveInteger(process.env.X402_MAX_DURATION_MONTHS, 24, 'X402_MAX_DURATION_MONTHS')
   };
 
   if (!Number.isInteger(config.walletAuthTokenTtlSeconds) || config.walletAuthTokenTtlSeconds <= 0) {
