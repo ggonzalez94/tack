@@ -450,6 +450,14 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     }
   });
 
+  // MPP middleware runs first on payment-gated routes
+  if (services.mppMiddleware) {
+    app.use('/pins', services.mppMiddleware);
+    app.use('/pins/*', services.mppMiddleware);
+    app.use('/upload', services.mppMiddleware);
+    app.use('/ipfs/*', services.mppMiddleware);
+  }
+
   app.use(services.paymentMiddleware);
 
   if (services.mppChallengeEnhancer) {
@@ -563,9 +571,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     });
   });
 
-  const mppMw: MiddlewareHandler[] = services.mppMiddleware ? [services.mppMiddleware] : [];
-
-  app.post('/pins', ...mppMw, async (c) => {
+  app.post('/pins', async (c) => {
     const body = parsePinPayload(await parseJsonBody(c));
     const paymentResult = c.get('paymentResult');
     const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
@@ -620,7 +626,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     return c.body(null, 202);
   });
 
-  app.post('/upload', ...mppMw, async (c) => {
+  app.post('/upload', async (c) => {
     const paymentResult = c.get('paymentResult');
     const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
     const declaredRequestSize = parseDeclaredRequestSize(c.req.raw.headers);
@@ -645,7 +651,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     return c.json({ cid }, 201);
   });
 
-  app.get('/ipfs/:cid', ...mppMw, async (c) => {
+  app.get('/ipfs/:cid', async (c) => {
     const cid = c.req.param('cid');
     const resolved = await services.pinningService.getContent(cid);
     const totalSize = resolved.content.byteLength;
