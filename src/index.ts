@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { serve } from '@hono/node-server';
+import type { MiddlewareHandler } from 'hono';
+import { Credential } from 'mppx';
 import { getConfig } from './config';
 import { createDb } from './db';
 import { PinRepository } from './repositories/pin-repository';
@@ -11,6 +13,10 @@ import { createX402PaymentMiddleware } from './services/x402';
 import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
+import { createMppInstance } from './services/payment/mpp';
+import { createMppPaymentMiddleware } from './services/payment/middleware';
+import { extractWalletFromDid } from './services/payment/wallet';
+import { calculatePriceUsd } from './services/payment/pricing';
 
 function getAppVersion(): string {
   try {
@@ -72,9 +78,69 @@ const paymentMiddleware = createX402PaymentMiddleware({
   }
 });
 
+// --- MPP (Machine Payment Protocol) on Tempo ---
+const mppx = config.mppSecretKey
+  ? createMppInstance(config.x402PayTo, config.mppSecretKey)
+  : null;
+
+const x402PricingConfig = {
+  basePriceUsd: config.x402BasePriceUsd,
+  pricePerMbUsd: config.x402PricePerMbUsd,
+  maxPriceUsd: config.x402MaxPriceUsd,
+};
+
+// MPP per-route middleware: handles Authorization: Payment credentials
+const mppMiddleware: MiddlewareHandler | undefined = mppx
+  ? createMppPaymentMiddleware({
+      mppx,
+      priceFn: (c) => {
+        const sizeBytes = Number(
+          c.req.header('x-content-size-bytes') ?? c.req.header('content-length') ?? '0'
+        );
+        return String(calculatePriceUsd(sizeBytes, x402PricingConfig));
+      },
+      extractWallet: (authHeader: string) => {
+        const credential = Credential.deserialize(authHeader);
+        if (!credential.source) {
+          throw new Error('MPP credential missing source field — cannot determine payer wallet');
+        }
+        return extractWalletFromDid(credential.source);
+      },
+    })
+  : undefined;
+
+// Challenge enhancer: adds MPP WWW-Authenticate header to x402 402 responses
+const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
+  ? async (c, next) => {
+      await next();
+
+      // If x402 returned 402, add the MPP challenge header too
+      if (c.res.status === 402 && !c.req.header('Authorization')?.startsWith('Payment ')) {
+        const sizeBytes = Number(
+          c.req.header('x-content-size-bytes') ?? c.req.header('content-length') ?? '0'
+        );
+        const priceUsd = String(calculatePriceUsd(sizeBytes, x402PricingConfig));
+        const mppResult = await mppx.charge({ amount: priceUsd })(c.req.raw);
+
+        if (mppResult.status === 402) {
+          const mppChallenge = mppResult.challenge as Response;
+          const wwwAuth = mppChallenge.headers.get('WWW-Authenticate');
+          if (wwwAuth) {
+            const existingBody = await c.res.text();
+            const headers = new Headers(c.res.headers);
+            headers.set('WWW-Authenticate', wwwAuth);
+            c.res = new Response(existingBody, { status: 402, headers });
+          }
+        }
+      }
+    }
+  : undefined;
+
 const app = createApp({
   pinningService,
   paymentMiddleware,
+  mppMiddleware,
+  mppChallengeEnhancer,
   walletAuth: {
     secret: config.walletAuthTokenSecret,
     issuer: config.walletAuthTokenIssuer,

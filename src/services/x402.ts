@@ -379,6 +379,11 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
   let initPromise: Promise<void> | null = httpServer.initialize();
 
   return async (c, next) => {
+    // Skip x402 payment if MPP already handled it
+    if ((c as any).get('paymentResult')) {
+      return next();
+    }
+
     const adapter = new HonoAdapter(c);
     const context: HTTPRequestContext = {
       adapter,

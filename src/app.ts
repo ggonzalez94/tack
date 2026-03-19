@@ -350,6 +350,8 @@ export interface AgentCardConfig {
 export interface AppServices {
   pinningService: PinningService;
   paymentMiddleware: MiddlewareHandler;
+  mppMiddleware?: MiddlewareHandler;
+  mppChallengeEnhancer?: MiddlewareHandler;
   walletAuth: WalletAuthConfig;
   gatewayCacheControlMaxAgeSeconds?: number;
   uploadMaxSizeBytes?: number;
@@ -373,6 +375,7 @@ interface AppEnv {
     requestId: string;
     walletAddress: string | null;
     walletAuthError: string | null;
+    paymentResult?: import('./services/payment/types.js').PaymentResult;
   };
 }
 
@@ -443,6 +446,10 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   });
 
   app.use(services.paymentMiddleware);
+
+  if (services.mppChallengeEnhancer) {
+    app.use(services.mppChallengeEnhancer);
+  }
 
   app.get('/health', async (c) => {
     if (!services.healthCheck) {
@@ -520,9 +527,12 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     });
   });
 
-  app.post('/pins', async (c) => {
+  const mppMw: MiddlewareHandler[] = services.mppMiddleware ? [services.mppMiddleware] : [];
+
+  app.post('/pins', ...mppMw, async (c) => {
     const body = parsePinPayload(await parseJsonBody(c));
-    const paidWallet = requirePaidWallet(c.req.raw.headers);
+    const paymentResult = c.get('paymentResult');
+    const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
     issueWalletAuthToken(c, paidWallet, services.walletAuth);
     const result = await services.pinningService.createPin({ ...body, owner: paidWallet });
     return c.json(toPinStatusResponse(result), 202);
@@ -574,8 +584,9 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     return c.body(null, 202);
   });
 
-  app.post('/upload', async (c) => {
-    const paidWallet = requirePaidWallet(c.req.raw.headers);
+  app.post('/upload', ...mppMw, async (c) => {
+    const paymentResult = c.get('paymentResult');
+    const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
     const declaredRequestSize = parseDeclaredRequestSize(c.req.raw.headers);
     if (declaredRequestSize !== null && declaredRequestSize > uploadMaxSizeBytes + MULTIPART_REQUEST_SIZE_OVERHEAD_BYTES) {
       throw new PayloadTooLargeError(`Upload exceeds ${uploadMaxSizeBytes} bytes`);
@@ -598,7 +609,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     return c.json({ cid }, 201);
   });
 
-  app.get('/ipfs/:cid', async (c) => {
+  app.get('/ipfs/:cid', ...mppMw, async (c) => {
     const cid = c.req.param('cid');
     const resolved = await services.pinningService.getContent(cid);
     const totalSize = resolved.content.byteLength;
