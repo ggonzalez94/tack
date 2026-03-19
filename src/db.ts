@@ -35,5 +35,12 @@ export function createDb(dbPath: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_pins_owner ON pins(owner);
   `);
 
+  // Migration: add expires_at column if missing
+  const columns = db.pragma('table_info(pins)') as Array<{ name: string }>;
+  if (!columns.some((col) => col.name === 'expires_at')) {
+    db.exec('ALTER TABLE pins ADD COLUMN expires_at TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pins_expires_at ON pins(expires_at)');
+
   return db;
 }
