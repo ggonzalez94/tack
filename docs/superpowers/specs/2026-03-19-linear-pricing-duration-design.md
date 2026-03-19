@@ -50,7 +50,7 @@ Header: `X-Pin-Duration-Months: <integer>`
 
 - Parsed in the x402 price resolver (same pattern as `X-Content-Size-Bytes`)
 - Range: 1 to `X402_MAX_DURATION_MONTHS`, default `X402_DEFAULT_DURATION_MONTHS`
-- Invalid/missing values fall back to default
+- 0, negative, non-integer, and out-of-range values are all invalid and fall back to default (note: existing `parsePositiveInteger` accepts 0, so a dedicated `>= 1` check is needed)
 - Applies to `POST /pins` only (see note on uploads below)
 
 ### Schema Change
@@ -70,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_pins_expires_at ON pins(expires_at);
 
 - `POST /pins` -- computed from header duration
 - `POST /pins/:requestid` (replace) -- inherits the original pin's `expires_at` (replace is free / wallet-auth only, no new payment)
-- `POST /upload` -- does **not** set `expires_at`. The upload route creates no pin record (it calls `ipfs add` and returns a CID). Agents are expected to follow up with `POST /pins` to create a tracked pin with expiry. The upload x402 price covers upload cost only (size-based, no duration component).
+- `POST /upload` -- does **not** set `expires_at`. The upload route creates no pin record (it calls `ipfs add` and returns a CID). Agents are expected to follow up with `POST /pins` to create a tracked pin with expiry. The upload x402 price uses `calculatePriceUsd(sizeBytes, 1, config)` -- always 1 month duration, covering the upload holding cost until the agent pins it.
 
 ### Expiry Sweep
 
@@ -81,7 +81,7 @@ In-process `setInterval` timer in `index.ts`:
 
 Sweep logic (new method on `PinningService`):
 
-1. Query `findExpired(limit: 50)`: `WHERE expires_at IS NOT NULL AND expires_at <= ?` with `new Date().toISOString()` as the comparator. `ORDER BY expires_at ASC` (oldest-expired first).
+1. Query `findExpired(limit: 50)`: `WHERE expires_at IS NOT NULL AND expires_at <= ? AND status IN ('pinned', 'failed')` with `new Date().toISOString()` as the comparator. `ORDER BY expires_at ASC` (oldest-expired first). Excludes `queued`/`pinning` pins to avoid racing with in-flight `pinAdd` operations.
 2. For each expired pin:
    - **CID safety check**: only call `ipfsClient.pinRm(cid)` if no other non-expired pin records reference the same CID. Query: count of pins with same CID where `expires_at IS NULL OR expires_at > now`. If count > 0, skip Kubo unpin but still delete this record.
    - If Kubo unpin needed: `ipfsClient.pinRm(cid)` + replica unpin -- best-effort
