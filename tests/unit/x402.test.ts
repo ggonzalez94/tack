@@ -10,6 +10,7 @@ import {
   createWalletAuthToken,
   createX402PaymentMiddleware,
   extractPaidWalletFromHeaders,
+  parseDurationMonths,
   resolveWalletFromHeaders,
   type WalletAuthConfig,
   type X402PaymentConfig
@@ -23,9 +24,11 @@ const testConfig: X402PaymentConfig = {
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
   usdcDomainVersion: '2',
-  basePriceUsd: 0.001,
-  pricePerMbUsd: 0.001,
-  maxPriceUsd: 0.01
+  ratePerGbMonthUsd: 0.10,
+  minPriceUsd: 0.001,
+  maxPriceUsd: 50.0,
+  defaultDurationMonths: 1,
+  maxDurationMonths: 24
 };
 const walletAuthConfig: WalletAuthConfig = {
   secret: '0123456789abcdef0123456789abcdef',
@@ -97,14 +100,68 @@ const mockFacilitator: FacilitatorClient = {
   }
 };
 
-describe('x402 payment integration helpers', () => {
-  it('calculates size-based pricing', () => {
-    expect(calculatePriceUsd(10, testConfig)).toBe(0.001);
-    expect(calculatePriceUsd(1_000_000, testConfig)).toBe(0.001);
-    expect(calculatePriceUsd(1_000_001, testConfig)).toBe(0.002);
-    expect(calculatePriceUsd(20_000_000, testConfig)).toBe(0.01);
+describe('calculatePriceUsd', () => {
+  const pricingConfig = {
+    ratePerGbMonthUsd: 0.10,
+    minPriceUsd: 0.001,
+    maxPriceUsd: 50.0
+  };
+
+  it('returns the floor for tiny files', () => {
+    expect(calculatePriceUsd(1024, 1, pricingConfig)).toBe(0.001);
+    expect(calculatePriceUsd(1_000_000, 1, pricingConfig)).toBe(0.001);
+    expect(calculatePriceUsd(1_000_000, 6, pricingConfig)).toBe(0.001);
   });
 
+  it('prices linearly by size and duration', () => {
+    const oneGb = 1_073_741_824;
+    expect(calculatePriceUsd(oneGb, 1, pricingConfig)).toBeCloseTo(0.10, 6);
+    expect(calculatePriceUsd(oneGb, 6, pricingConfig)).toBeCloseTo(0.60, 6);
+    expect(calculatePriceUsd(oneGb, 12, pricingConfig)).toBeCloseTo(1.20, 6);
+  });
+
+  it('prices 100 MB correctly', () => {
+    const hundredMb = 100 * 1_000_000;
+    expect(calculatePriceUsd(hundredMb, 1, pricingConfig)).toBeCloseTo(0.00931, 4);
+    expect(calculatePriceUsd(hundredMb, 6, pricingConfig)).toBeCloseTo(0.056, 3);
+  });
+
+  it('caps at max price', () => {
+    const tenGb = 10 * 1_073_741_824;
+    expect(calculatePriceUsd(tenGb, 24, pricingConfig)).toBeCloseTo(24.0, 2);
+    const lowCap = { ...pricingConfig, maxPriceUsd: 5.0 };
+    expect(calculatePriceUsd(tenGb, 24, lowCap)).toBe(5.0);
+  });
+
+  it('returns zero-byte files at min price', () => {
+    expect(calculatePriceUsd(0, 1, pricingConfig)).toBe(0.001);
+    expect(calculatePriceUsd(0, 12, pricingConfig)).toBe(0.001);
+  });
+});
+
+describe('parseDurationMonths', () => {
+  it('returns default when header is missing', () => {
+    expect(parseDurationMonths(null, 1, 24)).toBe(1);
+    expect(parseDurationMonths(undefined, 6, 24)).toBe(6);
+    expect(parseDurationMonths('', 1, 24)).toBe(1);
+  });
+
+  it('parses valid integer values', () => {
+    expect(parseDurationMonths('1', 1, 24)).toBe(1);
+    expect(parseDurationMonths('12', 1, 24)).toBe(12);
+    expect(parseDurationMonths('24', 1, 24)).toBe(24);
+  });
+
+  it('falls back to default for invalid values', () => {
+    expect(parseDurationMonths('0', 1, 24)).toBe(1);
+    expect(parseDurationMonths('-1', 1, 24)).toBe(1);
+    expect(parseDurationMonths('25', 1, 24)).toBe(24);
+    expect(parseDurationMonths('1.5', 1, 24)).toBe(1);
+    expect(parseDurationMonths('abc', 1, 24)).toBe(1);
+  });
+});
+
+describe('x402 payment integration helpers', () => {
   it('extracts wallet identity from x402 payment proof', () => {
     const paymentPayload: PaymentPayload = {
       x402Version: 2,
@@ -190,10 +247,14 @@ describe('x402 middleware', () => {
       error: string;
       protocol: { spec: string };
       client: { package: string };
+      pricing: { ratePerGbMonthUsd: number; durationMonths: number; minPriceUsd: number };
     };
     expect(unpaidBody.error).toBe('Payment required');
     expect(unpaidBody.protocol.spec).toBe('https://www.x402.org/');
     expect(unpaidBody.client.package).toBe('@x402/fetch');
+    expect(unpaidBody.pricing.ratePerGbMonthUsd).toBe(0.10);
+    expect(unpaidBody.pricing.durationMonths).toBe(1);
+    expect(unpaidBody.pricing.minPriceUsd).toBe(0.001);
 
     const paymentRequiredHeader = unpaid.headers.get('payment-required');
     expect(paymentRequiredHeader).toBeTruthy();

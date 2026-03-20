@@ -55,9 +55,11 @@ const paymentMiddleware = createX402PaymentMiddleware({
   usdcAssetDecimals: config.x402UsdcAssetDecimals,
   usdcDomainName: config.x402UsdcDomainName,
   usdcDomainVersion: config.x402UsdcDomainVersion,
-  basePriceUsd: config.x402BasePriceUsd,
-  pricePerMbUsd: config.x402PricePerMbUsd,
-  maxPriceUsd: config.x402MaxPriceUsd
+  ratePerGbMonthUsd: config.x402RatePerGbMonthUsd,
+  minPriceUsd: config.x402MinPriceUsd,
+  maxPriceUsd: config.x402MaxPriceUsd,
+  defaultDurationMonths: config.x402DefaultDurationMonths,
+  maxDurationMonths: config.x402MaxDurationMonths
 }, undefined, {
   resolveRetrievalPayment: (cid) => {
     const policy = pinningService.resolveRetrievalPaymentPolicy(cid);
@@ -90,15 +92,18 @@ const app = createApp({
     await ipfsClient.id();
   },
   rateLimiter,
+  defaultDurationMonths: config.x402DefaultDurationMonths,
+  maxDurationMonths: config.x402MaxDurationMonths,
   agentCard: {
     name: 'Tack',
     description: 'Pin to IPFS, pay with your wallet. No account needed.',
     version: appVersion,
     x402Network: config.x402Network,
     x402UsdcAssetAddress: config.x402UsdcAssetAddress,
-    x402BasePriceUsd: config.x402BasePriceUsd,
-    x402PricePerMbUsd: config.x402PricePerMbUsd,
-    x402MaxPriceUsd: config.x402MaxPriceUsd
+    x402RatePerGbMonthUsd: config.x402RatePerGbMonthUsd,
+    x402MinPriceUsd: config.x402MinPriceUsd,
+    x402DefaultDurationMonths: config.x402DefaultDurationMonths,
+    x402MaxDurationMonths: config.x402MaxDurationMonths
   }
 });
 
@@ -112,6 +117,31 @@ const server = serve(
   }
 );
 
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
+const SWEEP_STARTUP_DELAY_MS = 30 * 1000; // 30 seconds
+
+async function runSweep(): Promise<void> {
+  const startTime = Date.now();
+  try {
+    const result = await pinningService.sweepExpiredPins();
+    if (result.expiredCount > 0 || result.failedCount > 0) {
+      logger.info({ ...result, durationMs: Date.now() - startTime }, 'expiry sweep completed');
+    }
+  } catch (error) {
+    logger.error({ err: error, durationMs: Date.now() - startTime }, 'expiry sweep failed');
+  }
+}
+
+const sweepStartupTimer = setTimeout(() => {
+  void runSweep();
+}, SWEEP_STARTUP_DELAY_MS);
+sweepStartupTimer.unref();
+
+const sweepInterval = setInterval(() => {
+  void runSweep();
+}, SWEEP_INTERVAL_MS);
+sweepInterval.unref();
+
 let shuttingDown = false;
 
 const shutdown = (signal: NodeJS.Signals): void => {
@@ -121,6 +151,9 @@ const shutdown = (signal: NodeJS.Signals): void => {
 
   shuttingDown = true;
   logger.info({ signal }, 'received shutdown signal');
+
+  clearTimeout(sweepStartupTimer);
+  clearInterval(sweepInterval);
 
   const forceExitTimer = setTimeout(() => {
     logger.error({ timeoutMs: 10000 }, 'shutdown timed out, forcing exit');

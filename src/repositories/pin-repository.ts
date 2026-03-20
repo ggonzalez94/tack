@@ -13,6 +13,7 @@ interface DbPinRow {
   owner: string;
   created: string;
   updated: string;
+  expires_at: string | null;
 }
 
 interface DbCidOwnerRow {
@@ -80,9 +81,9 @@ export class PinRepository {
   create(record: StoredPinRecord): void {
     const statement = this.db.prepare(`
       INSERT INTO pins (
-        requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+        requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at
       ) VALUES (
-        @requestid, @cid, @name, @status, @origins, @meta, @delegates, @info, @owner, @created, @updated
+        @requestid, @cid, @name, @status, @origins, @meta, @delegates, @info, @owner, @created, @updated, @expires_at
       )
     `);
 
@@ -118,7 +119,8 @@ export class PinRepository {
           info = @info,
           owner = @owner,
           created = @created,
-          updated = @updated
+          updated = @updated,
+          expires_at = @expires_at
       WHERE requestid = @requestid
     `);
 
@@ -138,7 +140,7 @@ export class PinRepository {
 
   findByRequestId(requestid: string): StoredPinRecord | null {
     const row = this.db
-      .prepare('SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated FROM pins WHERE requestid = ?')
+      .prepare('SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at FROM pins WHERE requestid = ?')
       .get(requestid) as DbPinRow | undefined;
 
     return row ? this.mapRow(row) : null;
@@ -148,7 +150,7 @@ export class PinRepository {
     const pinnedRow = this.db
       .prepare(
         `
-          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at
           FROM pins
           WHERE cid = ? AND status = 'pinned'
           ORDER BY updated DESC, created DESC, rowid DESC
@@ -164,7 +166,7 @@ export class PinRepository {
     const fallbackRow = this.db
       .prepare(
         `
-          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at
           FROM pins
           WHERE cid = ?
           ORDER BY updated DESC, created DESC, rowid DESC
@@ -180,7 +182,7 @@ export class PinRepository {
     const pinnedRow = this.db
       .prepare(
         `
-          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at
           FROM pins
           WHERE cid = ? AND owner = ? AND status = 'pinned'
           ORDER BY updated DESC, created DESC, rowid DESC
@@ -196,7 +198,7 @@ export class PinRepository {
     const fallbackRow = this.db
       .prepare(
         `
-          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at
           FROM pins
           WHERE cid = ? AND owner = ?
           ORDER BY updated DESC, created DESC, rowid DESC
@@ -249,7 +251,7 @@ export class PinRepository {
     const total = this.db.prepare(countQuery).get(...params) as { count: number };
 
     const listQuery = `
-      SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated
+      SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at
       FROM pins
       ${whereClause}
       ORDER BY created DESC
@@ -266,6 +268,46 @@ export class PinRepository {
     };
   }
 
+  findExpired(limit: number, now: string): StoredPinRecord[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT requestid, cid, name, status, origins, meta, delegates, info, owner, created, updated, expires_at
+          FROM pins
+          WHERE expires_at IS NOT NULL AND expires_at <= ? AND status IN ('pinned', 'failed')
+          ORDER BY expires_at ASC
+          LIMIT ?
+        `
+      )
+      .all(now, limit) as DbPinRow[];
+
+    return rows.map((row) => this.mapRow(row));
+  }
+
+  countActivePinsForCid(cid: string, now: string): number {
+    const row = this.db
+      .prepare(
+        `
+          SELECT COUNT(*) as count
+          FROM pins
+          WHERE cid = ? AND status = 'pinned' AND (expires_at IS NULL OR expires_at > ?)
+        `
+      )
+      .get(cid, now) as { count: number };
+
+    return row.count;
+  }
+
+  deleteCidOwnerIfOrphaned(cid: string): void {
+    const pinCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM pins WHERE cid = ?')
+      .get(cid) as { count: number };
+
+    if (pinCount.count === 0) {
+      this.db.prepare('DELETE FROM cid_owners WHERE cid = ?').run(cid);
+    }
+  }
+
   private mapRow(row: DbPinRow): StoredPinRecord {
     return {
       requestid: row.requestid,
@@ -278,7 +320,8 @@ export class PinRepository {
       info: JSON.parse(row.info) as Record<string, unknown>,
       owner: row.owner,
       created: row.created,
-      updated: row.updated
+      updated: row.updated,
+      expires_at: row.expires_at
     };
   }
 

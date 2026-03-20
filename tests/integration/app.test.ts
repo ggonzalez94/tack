@@ -37,9 +37,11 @@ const paymentConfig: X402PaymentConfig = {
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
   usdcDomainVersion: '2',
-  basePriceUsd: 0.001,
-  pricePerMbUsd: 0.001,
-  maxPriceUsd: 0.01
+  ratePerGbMonthUsd: 0.10,
+  minPriceUsd: 0.001,
+  maxPriceUsd: 50.0,
+  defaultDurationMonths: 1,
+  maxDurationMonths: 24
 };
 
 function extractWallet(paymentPayload: PaymentPayload): string {
@@ -222,6 +224,8 @@ describe('API integration', () => {
       pinningService: service,
       paymentMiddleware,
       walletAuth: walletAuthConfig,
+      defaultDurationMonths: 1,
+      maxDurationMonths: 24,
       ...overrides
     });
   };
@@ -929,6 +933,87 @@ describe('API integration', () => {
       })
     );
     expect(spoofedDelete.status).toBe(401);
+  });
+
+  it('creates a pin with X-Pin-Duration-Months and includes expiresAt in response', async () => {
+    const createRes = await paidRequest(app, 'http://localhost/pins', walletA, () => ({
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-pin-duration-months': '6'
+      },
+      body: JSON.stringify({ cid: 'bafy-duration', name: 'test-duration' })
+    }));
+
+    expect(createRes.status).toBe(202);
+    const created = (await createRes.json()) as {
+      requestid: string;
+      info: { expiresAt?: string };
+    };
+    expect(created.info.expiresAt).toBeTruthy();
+
+    const expiresAt = new Date(created.info.expiresAt!);
+    const now = new Date();
+    const diffMonths = (expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30);
+    expect(diffMonths).toBeGreaterThan(5);
+    expect(diffMonths).toBeLessThan(7);
+  });
+
+  it('uses default duration when X-Pin-Duration-Months header is missing', async () => {
+    const createRes = await paidRequest(app, 'http://localhost/pins', walletA, () => ({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cid: 'bafy-default-duration' })
+    }));
+
+    expect(createRes.status).toBe(202);
+    const created = (await createRes.json()) as {
+      info: { expiresAt?: string };
+    };
+    expect(created.info.expiresAt).toBeTruthy();
+
+    const expiresAt = new Date(created.info.expiresAt!);
+    const now = new Date();
+    const diffMonths = (expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30);
+    expect(diffMonths).toBeGreaterThan(0.5);
+    expect(diffMonths).toBeLessThan(1.5);
+  });
+
+  it('returns updated agent card with new pricing fields', async () => {
+    const agentCardApp = buildApp({
+      agentCard: {
+        name: 'Tack',
+        description: 'Test agent',
+        version: '0.0.1',
+        x402Network: 'eip155:167000',
+        x402UsdcAssetAddress: '0x2222222222222222222222222222222222222222',
+        x402RatePerGbMonthUsd: 0.10,
+        x402MinPriceUsd: 0.001,
+        x402DefaultDurationMonths: 1,
+        x402MaxDurationMonths: 24
+      }
+    });
+
+    const response = await agentCardApp.request('http://localhost/.well-known/agent.json');
+    expect(response.status).toBe(200);
+
+    const card = (await response.json()) as {
+      pricing: {
+        pinning: {
+          ratePerGbMonthUsd: number;
+          minPriceUsd: number;
+          defaultDurationMonths: number;
+          maxDurationMonths: number;
+          durationHeader: string;
+        };
+      };
+    };
+
+    expect(card.pricing.pinning.ratePerGbMonthUsd).toBe(0.10);
+    expect(card.pricing.pinning.minPriceUsd).toBe(0.001);
+    expect(card.pricing.pinning.defaultDurationMonths).toBe(1);
+    expect(card.pricing.pinning.maxDurationMonths).toBe(24);
+    expect(card.pricing.pinning.durationHeader).toBe('X-Pin-Duration-Months');
   });
 
   it('enforces wallet ownership when listing and deleting pins', async () => {

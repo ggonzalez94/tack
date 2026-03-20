@@ -370,8 +370,8 @@ export function landingPageHtml(origin: string): string {
       </div>
       <div class="stats">
         <div class="stat">
-          <div class="stat-value">$0.001</div>
-          <div class="stat-label">Base pin price</div>
+          <div class="stat-value">$0.10</div>
+          <div class="stat-label">per GB / month</div>
         </div>
         <div class="stat">
           <div class="stat-value">0</div>
@@ -483,20 +483,20 @@ export function landingPageHtml(origin: string): string {
       <div class="section-label">Pricing</div>
       <div class="section-title">Pay per pin. No subscription.</div>
       <div class="section-sub">
-        Dynamic pricing based on content size. Settled on-chain in USDC on Taiko Alethia.
+        Linear pricing by file size and duration. Settled on-chain in USDC on Taiko Alethia.
       </div>
       <div class="pricing-card">
         <div class="pricing-label">Pay-per-use</div>
-        <div class="pricing-value">$0.001</div>
-        <div class="pricing-unit">base + $0.001/MB &middot; capped at $0.01</div>
+        <div class="pricing-value">$0.10</div>
+        <div class="pricing-unit">per GB per month &middot; $0.001 minimum</div>
         <ul class="pricing-features">
           <li>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-            Unlimited pins &amp; uploads
+            Choose duration: 1&ndash;24 months
           </li>
           <li>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-            Content gateway included
+            Pins auto-expire &mdash; no unbounded storage cost
           </li>
           <li>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
@@ -585,13 +585,17 @@ const x402Fetch = wrapFetchWithPaymentFromConfig(fetch, {
   schemes: [{ network: "eip155:167000", client: new ExactEvmScheme(wallet) }],
 });
 
-// Pin a CID &mdash; x402 payment is handled automatically
+// Pin a CID for 6 months &mdash; x402 payment is handled automatically
 const res = await x402Fetch("${o}/pins", {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
+  headers: {
+    "Content-Type": "application/json",
+    "X-Pin-Duration-Months": "6",  // 1&ndash;24, default 1
+  },
   body: JSON.stringify({ cid: "Qm..." }),
 });
 // res.status === 202
+// res.body.info.expiresAt &rarr; when the pin expires
 // res.headers["x-wallet-auth-token"] &rarr; save for owner requests
 
 // Retrieve content &mdash; free by default

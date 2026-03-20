@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDb } from '../../src/db';
 import { PinRepository } from '../../src/repositories/pin-repository';
+import { GatewayContentCache } from '../../src/services/content-cache';
 import type { IpfsClient } from '../../src/services/ipfs-rpc-client';
 import { PinningService } from '../../src/services/pinning-service';
 
@@ -252,5 +253,125 @@ describe('PinningService', () => {
     db.prepare('DELETE FROM cid_owners WHERE cid = ?').run('bafy-legacy-ambiguous');
 
     expect(service.resolveRetrievalPaymentPolicy('bafy-legacy-ambiguous')).toBeNull();
+  });
+
+  it('sets expires_at when durationMonths is provided', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-19T12:00:00.000Z'));
+
+    const result = await service.createPin({ cid: 'bafy-expiry', owner: wallet, durationMonths: 3 });
+
+    expect(result.expires_at).toBe('2026-06-19T12:00:00.000Z');
+    expect(result.status).toBe('pinned');
+  });
+
+  it('leaves expires_at null when called without durationMonths (internal/legacy path)', async () => {
+    const result = await service.createPin({ cid: 'bafy-no-expiry', owner: wallet });
+
+    expect(result.expires_at).toBeNull();
+  });
+
+  it('inherits expires_at when replacing a pin', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-19T12:00:00.000Z'));
+
+    const created = await service.createPin({ cid: 'bafy-original', owner: wallet, durationMonths: 6 });
+    expect(created.expires_at).toBe('2026-09-19T12:00:00.000Z');
+
+    vi.setSystemTime(new Date('2026-04-01T00:00:00.000Z'));
+    const replaced = await service.replacePin(created.requestid, { cid: 'bafy-replacement' }, wallet);
+
+    expect(replaced.expires_at).toBe('2026-09-19T12:00:00.000Z');
+  });
+
+  it('sweeps expired pins: unpin, delete record, evict cache', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+
+    const created = await service.createPin({ cid: 'bafy-sweep', owner: wallet, durationMonths: 1 });
+    expect(created.status).toBe('pinned');
+
+    vi.setSystemTime(new Date('2026-04-02T00:00:00.000Z'));
+
+    const result = await service.sweepExpiredPins();
+
+    expect(result.expiredCount).toBe(1);
+    expect(result.failedCount).toBe(0);
+    expect(ipfsClient.pinRm).toHaveBeenCalledWith('bafy-sweep');
+    expect(() => service.getPin(created.requestid, wallet)).toThrow('not found');
+  });
+
+  it('skips Kubo unpin when another active pin shares the CID', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+
+    await service.createPin({ cid: 'bafy-shared', owner: wallet, durationMonths: 1 });
+    await service.createPin({ cid: 'bafy-shared', owner: otherWallet, durationMonths: 12 });
+
+    vi.setSystemTime(new Date('2026-04-02T00:00:00.000Z'));
+    ipfsClient.pinRm.mockClear();
+
+    const result = await service.sweepExpiredPins();
+
+    expect(result.expiredCount).toBe(1);
+    expect(result.skippedUnpinCount).toBe(1);
+    expect(ipfsClient.pinRm).not.toHaveBeenCalled();
+  });
+
+  it('does not sweep pins with null expires_at', async () => {
+    await service.createPin({ cid: 'bafy-legacy', owner: wallet });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2099-01-01T00:00:00.000Z'));
+
+    const result = await service.sweepExpiredPins();
+    expect(result.expiredCount).toBe(0);
+  });
+
+  it('cleans up orphaned cid_owners after sweep', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+
+    await service.createPin({ cid: 'bafy-orphan', owner: wallet, durationMonths: 1 });
+
+    vi.setSystemTime(new Date('2026-04-02T00:00:00.000Z'));
+    await service.sweepExpiredPins();
+
+    const cidOwner = db
+      .prepare('SELECT * FROM cid_owners WHERE cid = ?')
+      .get('bafy-orphan');
+    expect(cidOwner).toBeUndefined();
+  });
+
+  it('evicts content cache when sweeping expired pins', async () => {
+    const contentCache = new GatewayContentCache(10 * 1024 * 1024);
+    service = new PinningService(repository, ipfsClient, 'http://localhost:8080/ipfs', { contentCache });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+
+    await service.createPin({ cid: 'bafy-cache-evict', owner: wallet, durationMonths: 1 });
+    contentCache.set({ cid: 'bafy-cache-evict', content: new ArrayBuffer(4), contentType: 'text/plain', filename: null, size: 4 });
+    expect(contentCache.get('bafy-cache-evict')).toBeTruthy();
+
+    vi.setSystemTime(new Date('2026-04-02T00:00:00.000Z'));
+    await service.sweepExpiredPins();
+
+    expect(contentCache.get('bafy-cache-evict')).toBeFalsy();
+  });
+
+  it('deletes record even when Kubo unpin fails to prevent zombie loops', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-01T00:00:00.000Z'));
+
+    const created = await service.createPin({ cid: 'bafy-retry', owner: wallet, durationMonths: 1 });
+
+    vi.setSystemTime(new Date('2026-04-02T00:00:00.000Z'));
+    ipfsClient.pinRm.mockRejectedValueOnce(new Error('kubo down'));
+
+    const firstSweep = await service.sweepExpiredPins();
+    expect(firstSweep.failedCount).toBe(1);
+    expect(firstSweep.expiredCount).toBe(1);
+    expect(() => service.getPin(created.requestid, wallet)).toThrow('not found');
   });
 });
