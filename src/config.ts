@@ -197,7 +197,7 @@ export function getConfig(): AppConfig {
     x402UsdcAssetDecimals: parseNumber(process.env.X402_USDC_ASSET_DECIMALS, 6, 'X402_USDC_ASSET_DECIMALS'),
     x402UsdcDomainName: process.env.X402_USDC_DOMAIN_NAME ?? 'USD Coin',
     x402UsdcDomainVersion: process.env.X402_USDC_DOMAIN_VERSION ?? '2',
-    x402RatePerGbMonthUsd: parseNumber(process.env.X402_RATE_PER_GB_MONTH_USD, 0.05, 'X402_RATE_PER_GB_MONTH_USD'),
+    x402RatePerGbMonthUsd: parseNumber(process.env.X402_RATE_PER_GB_MONTH_USD, 0.10, 'X402_RATE_PER_GB_MONTH_USD'),
     x402MinPriceUsd: parseNumber(process.env.X402_MIN_PRICE_USD, 0.001, 'X402_MIN_PRICE_USD'),
     x402MaxPriceUsd: parseNumber(process.env.X402_MAX_PRICE_USD, 50.0, 'X402_MAX_PRICE_USD'),
     x402DefaultDurationMonths: parsePositiveInteger(process.env.X402_DEFAULT_DURATION_MONTHS, 1, 'X402_DEFAULT_DURATION_MONTHS'),

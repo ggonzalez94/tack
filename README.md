@@ -53,7 +53,7 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 | `GET` | `/health` | None | Service health check |
 | `GET` | `/.well-known/agent.json` | None | A2A agent discovery |
 
-**Pricing**: Linear by size and duration — `max($0.001, fileSizeGB × $0.05 × durationMonths)`. Settled in USDC on Taiko Alethia via x402. Set `X-Pin-Duration-Months` header (1–24, default 1) to control how long content stays pinned. Expired pins are automatically cleaned up.
+**Pricing**: Linear by size and duration — `max($0.001, fileSizeGB × $0.10 × durationMonths)`. Settled in USDC on Taiko Alethia via x402. Set `X-Pin-Duration-Months` header (1–24, default 1) to control how long content stays pinned. Expired pins are automatically cleaned up.
 
 **Auth model**: Paid endpoints use `payment-signature` (x402). Successful paid responses return a short-lived `x-wallet-auth-token` response header. Owner endpoints (list, get, replace, delete) require that bearer token. The wallet that pays owns the pin.
 

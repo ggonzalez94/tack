@@ -135,7 +135,7 @@ describe('config validation', () => {
     });
 
     const config = getConfig();
-    expect(config.x402RatePerGbMonthUsd).toBe(0.05);
+    expect(config.x402RatePerGbMonthUsd).toBe(0.10);
     expect(config.x402MinPriceUsd).toBe(0.001);
     expect(config.x402MaxPriceUsd).toBe(50.0);
     expect(config.x402DefaultDurationMonths).toBe(1);

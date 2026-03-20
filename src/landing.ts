@@ -370,7 +370,7 @@ export function landingPageHtml(origin: string): string {
       </div>
       <div class="stats">
         <div class="stat">
-          <div class="stat-value">$0.05</div>
+          <div class="stat-value">$0.10</div>
           <div class="stat-label">per GB / month</div>
         </div>
         <div class="stat">
@@ -487,7 +487,7 @@ export function landingPageHtml(origin: string): string {
       </div>
       <div class="pricing-card">
         <div class="pricing-label">Pay-per-use</div>
-        <div class="pricing-value">$0.05</div>
+        <div class="pricing-value">$0.10</div>
         <div class="pricing-unit">per GB per month &middot; $0.001 minimum</div>
         <ul class="pricing-features">
           <li>

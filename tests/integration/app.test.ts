@@ -37,7 +37,7 @@ const paymentConfig: X402PaymentConfig = {
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
   usdcDomainVersion: '2',
-  ratePerGbMonthUsd: 0.05,
+  ratePerGbMonthUsd: 0.10,
   minPriceUsd: 0.001,
   maxPriceUsd: 50.0,
   defaultDurationMonths: 1,
@@ -987,7 +987,7 @@ describe('API integration', () => {
         version: '0.0.1',
         x402Network: 'eip155:167000',
         x402UsdcAssetAddress: '0x2222222222222222222222222222222222222222',
-        x402RatePerGbMonthUsd: 0.05,
+        x402RatePerGbMonthUsd: 0.10,
         x402MinPriceUsd: 0.001,
         x402DefaultDurationMonths: 1,
         x402MaxDurationMonths: 24
@@ -1009,7 +1009,7 @@ describe('API integration', () => {
       };
     };
 
-    expect(card.pricing.pinning.ratePerGbMonthUsd).toBe(0.05);
+    expect(card.pricing.pinning.ratePerGbMonthUsd).toBe(0.10);
     expect(card.pricing.pinning.minPriceUsd).toBe(0.001);
     expect(card.pricing.pinning.defaultDurationMonths).toBe(1);
     expect(card.pricing.pinning.maxDurationMonths).toBe(24);

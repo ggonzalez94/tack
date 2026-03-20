@@ -24,7 +24,7 @@ const testConfig: X402PaymentConfig = {
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
   usdcDomainVersion: '2',
-  ratePerGbMonthUsd: 0.05,
+  ratePerGbMonthUsd: 0.10,
   minPriceUsd: 0.001,
   maxPriceUsd: 50.0,
   defaultDurationMonths: 1,
@@ -102,7 +102,7 @@ const mockFacilitator: FacilitatorClient = {
 
 describe('calculatePriceUsd', () => {
   const pricingConfig = {
-    ratePerGbMonthUsd: 0.05,
+    ratePerGbMonthUsd: 0.10,
     minPriceUsd: 0.001,
     maxPriceUsd: 50.0
   };
@@ -115,20 +115,20 @@ describe('calculatePriceUsd', () => {
 
   it('prices linearly by size and duration', () => {
     const oneGb = 1_073_741_824;
-    expect(calculatePriceUsd(oneGb, 1, pricingConfig)).toBeCloseTo(0.05, 6);
-    expect(calculatePriceUsd(oneGb, 6, pricingConfig)).toBeCloseTo(0.30, 6);
-    expect(calculatePriceUsd(oneGb, 12, pricingConfig)).toBeCloseTo(0.60, 6);
+    expect(calculatePriceUsd(oneGb, 1, pricingConfig)).toBeCloseTo(0.10, 6);
+    expect(calculatePriceUsd(oneGb, 6, pricingConfig)).toBeCloseTo(0.60, 6);
+    expect(calculatePriceUsd(oneGb, 12, pricingConfig)).toBeCloseTo(1.20, 6);
   });
 
   it('prices 100 MB correctly', () => {
     const hundredMb = 100 * 1_000_000;
-    expect(calculatePriceUsd(hundredMb, 1, pricingConfig)).toBeCloseTo(0.00466, 4);
-    expect(calculatePriceUsd(hundredMb, 6, pricingConfig)).toBeCloseTo(0.028, 3);
+    expect(calculatePriceUsd(hundredMb, 1, pricingConfig)).toBeCloseTo(0.00931, 4);
+    expect(calculatePriceUsd(hundredMb, 6, pricingConfig)).toBeCloseTo(0.056, 3);
   });
 
   it('caps at max price', () => {
     const tenGb = 10 * 1_073_741_824;
-    expect(calculatePriceUsd(tenGb, 24, pricingConfig)).toBeCloseTo(12.0, 2);
+    expect(calculatePriceUsd(tenGb, 24, pricingConfig)).toBeCloseTo(24.0, 2);
     const lowCap = { ...pricingConfig, maxPriceUsd: 5.0 };
     expect(calculatePriceUsd(tenGb, 24, lowCap)).toBe(5.0);
   });
@@ -252,7 +252,7 @@ describe('x402 middleware', () => {
     expect(unpaidBody.error).toBe('Payment required');
     expect(unpaidBody.protocol.spec).toBe('https://www.x402.org/');
     expect(unpaidBody.client.package).toBe('@x402/fetch');
-    expect(unpaidBody.pricing.ratePerGbMonthUsd).toBe(0.05);
+    expect(unpaidBody.pricing.ratePerGbMonthUsd).toBe(0.10);
     expect(unpaidBody.pricing.durationMonths).toBe(1);
     expect(unpaidBody.pricing.minPriceUsd).toBe(0.001);
 
