@@ -18,6 +18,7 @@ import { createContentDispositionHeader, shouldServeContentAsAttachment } from '
 import {
   createWalletAuthToken,
   extractPaidWalletFromHeaders,
+  parseDurationMonths,
   resolveWalletFromHeaders,
   WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER,
   WALLET_AUTH_TOKEN_RESPONSE_HEADER,
@@ -342,10 +343,11 @@ export interface AgentCardConfig {
   version: string;
   x402Network: string;
   x402UsdcAssetAddress: string;
-  x402BasePriceUsd: number;
-  x402PricePerMbUsd: number;
+  x402RatePerGbMonthUsd: number;
+  x402MinPriceUsd: number;
   x402MaxPriceUsd: number;
-  // MPP fields:
+  x402DefaultDurationMonths: number;
+  x402MaxDurationMonths: number;
   mppMethod?: string;
   mppChainId?: number;
   mppAsset?: string;
@@ -366,6 +368,8 @@ export interface AppServices {
   rateLimiter?: InMemoryRateLimiter;
   healthCheck?: () => Promise<void>;
   agentCard?: AgentCardConfig;
+  defaultDurationMonths?: number;
+  maxDurationMonths?: number;
 }
 
 interface AppEnv {
@@ -536,9 +540,12 @@ export function createApp(services: AppServices): Hono<AppEnv> {
       payments: {
         protocols,
         pricing: {
-          base: agent?.x402BasePriceUsd,
-          perMb: agent?.x402PricePerMbUsd,
-          max: agent?.x402MaxPriceUsd,
+          ratePerGbMonthUsd: agent?.x402RatePerGbMonthUsd,
+          minPriceUsd: agent?.x402MinPriceUsd,
+          maxPriceUsd: agent?.x402MaxPriceUsd,
+          defaultDurationMonths: agent?.x402DefaultDurationMonths,
+          maxDurationMonths: agent?.x402MaxDurationMonths,
+          durationHeader: 'X-Pin-Duration-Months',
           currency: 'USD',
         },
       },
@@ -550,9 +557,12 @@ export function createApp(services: AppServices): Hono<AppEnv> {
           paymentHeader: 'Payment-Signature',
           network: agent?.x402Network,
           asset: agent?.x402UsdcAssetAddress,
-          baseUsd: agent?.x402BasePriceUsd,
-          perMbUsd: agent?.x402PricePerMbUsd,
-          maxUsd: agent?.x402MaxPriceUsd
+          ratePerGbMonthUsd: agent?.x402RatePerGbMonthUsd,
+          minPriceUsd: agent?.x402MinPriceUsd,
+          maxPriceUsd: agent?.x402MaxPriceUsd,
+          defaultDurationMonths: agent?.x402DefaultDurationMonths,
+          maxDurationMonths: agent?.x402MaxDurationMonths,
+          durationHeader: 'X-Pin-Duration-Months'
         },
         retrieval: {
           protocol: 'x402-optional',
@@ -580,7 +590,17 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     const paymentResult = c.get('paymentResult');
     const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
     issueWalletAuthToken(c, paidWallet, services.walletAuth);
-    const result = await services.pinningService.createPin({ ...body, owner: paidWallet });
+
+    const durationMonths = parseDurationMonths(
+      c.req.raw.headers.get('x-pin-duration-months'),
+      services.defaultDurationMonths ?? 1,
+      services.maxDurationMonths ?? 24
+    );
+    const result = await services.pinningService.createPin({
+      ...body,
+      owner: paidWallet,
+      durationMonths
+    });
     return c.json(toPinStatusResponse(result), 202);
   });
 

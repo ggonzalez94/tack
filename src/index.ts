@@ -13,10 +13,17 @@ import { createX402PaymentMiddleware } from './services/x402';
 import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
+import { getChainByName } from './services/payment/chains';
 import { createMppInstance } from './services/payment/mpp';
 import { createMppPaymentMiddleware } from './services/payment/middleware';
+import {
+  calculatePriceUsd,
+  parseDurationMonths,
+  parseNonNegativeInteger,
+  parseSizeBytesFromPinPayload,
+  type LinearPricingConfig
+} from './services/payment/pricing';
 import { extractWalletFromDid } from './services/payment/wallet';
-import { calculatePriceUsd } from './services/payment/pricing';
 
 function getAppVersion(): string {
   try {
@@ -61,9 +68,11 @@ const paymentMiddleware = createX402PaymentMiddleware({
   usdcAssetDecimals: config.x402UsdcAssetDecimals,
   usdcDomainName: config.x402UsdcDomainName,
   usdcDomainVersion: config.x402UsdcDomainVersion,
-  basePriceUsd: config.x402BasePriceUsd,
-  pricePerMbUsd: config.x402PricePerMbUsd,
-  maxPriceUsd: config.x402MaxPriceUsd
+  ratePerGbMonthUsd: config.x402RatePerGbMonthUsd,
+  minPriceUsd: config.x402MinPriceUsd,
+  maxPriceUsd: config.x402MaxPriceUsd,
+  defaultDurationMonths: config.x402DefaultDurationMonths,
+  maxDurationMonths: config.x402MaxDurationMonths
 }, undefined, {
   resolveRetrievalPayment: (cid) => {
     const policy = pinningService.resolveRetrievalPaymentPolicy(cid);
@@ -79,29 +88,81 @@ const paymentMiddleware = createX402PaymentMiddleware({
 });
 
 // --- MPP (Machine Payment Protocol) on Tempo ---
+const tempoChain = getChainByName('tempo');
 const mppx = config.mppSecretKey
   ? createMppInstance(config.x402PayTo, config.mppSecretKey)
   : null;
 
-const x402PricingConfig = {
-  basePriceUsd: config.x402BasePriceUsd,
-  pricePerMbUsd: config.x402PricePerMbUsd,
-  maxPriceUsd: config.x402MaxPriceUsd,
+const paymentPricingConfig: LinearPricingConfig = {
+  ratePerGbMonthUsd: config.x402RatePerGbMonthUsd,
+  minPriceUsd: config.x402MinPriceUsd,
+  maxPriceUsd: config.x402MaxPriceUsd
 };
+
+async function resolvePinPriceUsd(c: Context): Promise<number> {
+  const durationMonths = parseDurationMonths(
+    c.req.header('x-pin-duration-months'),
+    config.x402DefaultDurationMonths,
+    config.x402MaxDurationMonths
+  );
+  const explicitSize = parseNonNegativeInteger(c.req.header('x-content-size-bytes'));
+  if (explicitSize !== undefined) {
+    return calculatePriceUsd(explicitSize, durationMonths, paymentPricingConfig);
+  }
+
+  try {
+    const body = await c.req.raw.clone().json();
+    const bodySize = parseSizeBytesFromPinPayload(body);
+    if (bodySize !== undefined) {
+      return calculatePriceUsd(bodySize, durationMonths, paymentPricingConfig);
+    }
+  } catch {
+    // Fall back to the declared request size when the JSON pin payload is unavailable.
+  }
+
+  const fallbackSize = parseNonNegativeInteger(c.req.header('content-length')) ?? 0;
+  return calculatePriceUsd(fallbackSize, durationMonths, paymentPricingConfig);
+}
+
+function resolveUploadPriceUsd(c: Context): number {
+  const sizeBytes =
+    parseNonNegativeInteger(c.req.header('x-content-size-bytes')) ??
+    parseNonNegativeInteger(c.req.header('content-length')) ??
+    0;
+
+  return calculatePriceUsd(sizeBytes, 1, paymentPricingConfig);
+}
 
 // Shared MPP price resolution — single source of truth for both
 // the per-route middleware and the challenge enhancer.
-function resolveMppPrice(c: Context): string | null {
+async function resolveMppPrice(c: Context): Promise<string | null> {
+  if (c.req.path === '/pins') {
+    if (c.req.method !== 'POST') {
+      return null;
+    }
+
+    return String(await resolvePinPriceUsd(c));
+  }
+
+  if (c.req.path === '/upload') {
+    if (c.req.method !== 'POST') {
+      return null;
+    }
+
+    return String(resolveUploadPriceUsd(c));
+  }
+
   const cidParam = c.req.param('cid');
   if (cidParam && c.req.method === 'GET') {
     const policy = pinningService.resolveRetrievalPaymentPolicy(cidParam);
-    if (!policy || policy.priceUsd <= 0) return null;
+    if (!policy || policy.priceUsd <= 0) {
+      return null;
+    }
+
     return String(policy.priceUsd);
   }
-  const sizeBytes = Number(
-    c.req.header('x-content-size-bytes') ?? c.req.header('content-length') ?? '0'
-  );
-  return String(calculatePriceUsd(sizeBytes, x402PricingConfig));
+
+  return null;
 }
 
 // MPP per-route middleware: handles Authorization: Payment credentials
@@ -122,12 +183,14 @@ const mppMiddleware: MiddlewareHandler | undefined = mppx
 // Challenge enhancer: adds MPP WWW-Authenticate header to x402 402 responses
 const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
   ? async (c, next) => {
+      const priceUsd = await resolveMppPrice(c);
       await next();
 
       // If x402 returned 402, add the MPP challenge header too
       if (c.res.status === 402 && !c.req.header('Authorization')?.startsWith('Payment ')) {
-        const priceUsd = resolveMppPrice(c);
-        if (!priceUsd) return; // Free retrieval, no challenge needed
+        if (!priceUsd) {
+          return;
+        }
 
         // Build a minimal synthetic request for challenge generation.
         // Avoids passing c.req.raw whose body may already be consumed by x402.
@@ -172,19 +235,23 @@ const app = createApp({
     await ipfsClient.id();
   },
   rateLimiter,
+  defaultDurationMonths: config.x402DefaultDurationMonths,
+  maxDurationMonths: config.x402MaxDurationMonths,
   agentCard: {
     name: 'Tack',
     description: 'Pin to IPFS, pay with your wallet. No account needed.',
     version: appVersion,
     x402Network: config.x402Network,
     x402UsdcAssetAddress: config.x402UsdcAssetAddress,
-    x402BasePriceUsd: config.x402BasePriceUsd,
-    x402PricePerMbUsd: config.x402PricePerMbUsd,
+    x402RatePerGbMonthUsd: config.x402RatePerGbMonthUsd,
+    x402MinPriceUsd: config.x402MinPriceUsd,
     x402MaxPriceUsd: config.x402MaxPriceUsd,
-    mppMethod: 'tempo',
-    mppChainId: 4217,
-    mppAsset: '0x20C000000000000000000000b9537d11c60E8b50',
-    mppAssetSymbol: 'USDC.e',
+    x402DefaultDurationMonths: config.x402DefaultDurationMonths,
+    x402MaxDurationMonths: config.x402MaxDurationMonths,
+    mppMethod: mppx ? tempoChain?.mpp?.method : undefined,
+    mppChainId: mppx ? tempoChain?.chainId : undefined,
+    mppAsset: mppx ? tempoChain?.asset.address : undefined,
+    mppAssetSymbol: mppx ? tempoChain?.asset.symbol : undefined
   }
 });
 
@@ -198,6 +265,31 @@ const server = serve(
   }
 );
 
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
+const SWEEP_STARTUP_DELAY_MS = 30 * 1000; // 30 seconds
+
+async function runSweep(): Promise<void> {
+  const startTime = Date.now();
+  try {
+    const result = await pinningService.sweepExpiredPins();
+    if (result.expiredCount > 0 || result.failedCount > 0) {
+      logger.info({ ...result, durationMs: Date.now() - startTime }, 'expiry sweep completed');
+    }
+  } catch (error) {
+    logger.error({ err: error, durationMs: Date.now() - startTime }, 'expiry sweep failed');
+  }
+}
+
+const sweepStartupTimer = setTimeout(() => {
+  void runSweep();
+}, SWEEP_STARTUP_DELAY_MS);
+sweepStartupTimer.unref();
+
+const sweepInterval = setInterval(() => {
+  void runSweep();
+}, SWEEP_INTERVAL_MS);
+sweepInterval.unref();
+
 let shuttingDown = false;
 
 const shutdown = (signal: NodeJS.Signals): void => {
@@ -207,6 +299,9 @@ const shutdown = (signal: NodeJS.Signals): void => {
 
   shuttingDown = true;
   logger.info({ signal }, 'received shutdown signal');
+
+  clearTimeout(sweepStartupTimer);
+  clearInterval(sweepInterval);
 
   const forceExitTimer = setTimeout(() => {
     logger.error({ timeoutMs: 10000 }, 'shutdown timed out, forcing exit');

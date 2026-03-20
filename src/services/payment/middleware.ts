@@ -3,7 +3,7 @@ import type { PaymentResult } from './types.js';
 
 interface MppPaymentMiddlewareConfig {
   mppx: { charge: (options: { amount: string }) => (req: Request) => Promise<any> };
-  priceFn: (c: Context) => string | null;
+  priceFn: (c: Context) => string | null | Promise<string | null>;
   extractWallet: (authHeader: string) => string;
 }
 
@@ -18,7 +18,7 @@ export function createMppPaymentMiddleware(config: MppPaymentMiddlewareConfig): 
       return next();
     }
 
-    const priceUsd = priceFn(c);
+    const priceUsd = await priceFn(c);
 
     // Free content — no payment required
     if (priceUsd === null) {

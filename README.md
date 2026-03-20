@@ -2,7 +2,7 @@
 
 **Pin to IPFS. Pay with your wallet. No account needed.**
 
-Tack is an IPFS pinning and retrieval service where payment *is* the authentication. No API keys, no signup, no monthly plans. Send a request with a wallet, pay per-use via [x402](https://www.x402.org/), and your content is pinned.
+Tack is an IPFS pinning and retrieval service where payment *is* the authentication. No API keys, no signup, no monthly plans. Send a request with a wallet, pay per-use via [x402](https://www.x402.org/) on Taiko or MPP on Tempo, and your content is pinned for as long as you paid for.
 
 Built for AI agents, developer tooling, and any machine that needs to store data on IPFS without a human creating an account first.
 
@@ -18,18 +18,21 @@ Built for AI agents, developer tooling, and any machine that needs to store data
 ## Quickstart
 
 ```bash
-# Pin content (first call returns 402 with payment requirements)
+# Pin content for 6 months (first call returns 402 with payment requirements)
 curl -X POST https://tack-api-production.up.railway.app/pins \
   -H 'content-type: application/json' \
+  -H 'X-Pin-Duration-Months: 6' \
   -d '{"cid":"bafybeigdyrzt...","name":"example.txt"}'
 
 # After x402 payment, retry with signature
 curl -X POST https://tack-api-production.up.railway.app/pins \
   -H 'content-type: application/json' \
+  -H 'X-Pin-Duration-Months: 6' \
   -H 'payment-signature: <x402-payment-signature>' \
   -d '{"cid":"bafybeigdyrzt...","name":"example.txt"}'
+# Response includes info.expiresAt and x-wallet-auth-token header
 
-# Save the owner token returned in the response headers and use it on owner routes
+# Use the owner token on authenticated routes
 curl https://tack-api-production.up.railway.app/pins/<requestid> \
   -H 'Authorization: Bearer <x-wallet-auth-token>'
 ```
@@ -40,8 +43,8 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/pins` | x402 payment | Pin a CID |
-| `POST` | `/upload` | x402 payment | Upload a file and pin it |
+| `POST` | `/pins` | x402 or MPP payment | Pin a CID |
+| `POST` | `/upload` | x402 or MPP payment | Upload a file and pin it |
 | `GET` | `/pins` | Wallet identity | List your pins |
 | `GET` | `/pins/:requestid` | Wallet identity | Get pin status |
 | `POST` | `/pins/:requestid` | Wallet identity | Replace a pin |
@@ -50,9 +53,9 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 | `GET` | `/health` | None | Service health check |
 | `GET` | `/.well-known/agent.json` | None | A2A agent discovery |
 
-**Pricing**: $0.001 base + $0.001/MB per pin operation, settled in USDC on Taiko Alethia via x402.
+**Pricing**: Linear by size and duration — `max($0.001, fileSizeGB × $0.10 × durationMonths)`. Settled in USDC on Taiko Alethia via x402 or in USDC.e on Tempo via MPP. Set `X-Pin-Duration-Months` header (1–24, default 1) to control how long content stays pinned. Expired pins are automatically cleaned up.
 
-**Auth model**: Paid endpoints use `payment-signature` (x402). Successful paid responses return a short-lived `x-wallet-auth-token` response header. Owner endpoints (list, get, replace, delete) require that bearer token. The wallet that pays owns the pin.
+**Auth model**: Paid endpoints accept either `payment-signature` (x402) or `Authorization: Payment ...` (MPP). Successful paid responses return a short-lived `x-wallet-auth-token` response header. Owner endpoints (list, get, replace, delete) require that bearer token. The wallet that pays owns the pin.
 
 **Gateway safety**: Tack serves browser-active content types with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff` so HTML/SVG/JS payloads are not executed inline from the API origin.
 
@@ -98,7 +101,7 @@ pnpm build        # Compile TypeScript
 pnpm smoke:x402   # End-to-end x402 payment smoke test
 ```
 
-See `.env.example` for all configuration options. Deployment docs live in `docs/`.
+See `.env.example` for all configuration options. Deployment docs live in `docs/`, including [`docs/dual-protocol-smoke.md`](docs/dual-protocol-smoke.md) for x402 + MPP verification.
 
 ## License
 

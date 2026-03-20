@@ -78,6 +78,18 @@ describe('config validation', () => {
     expect(config.walletAuthTokenTtlSeconds).toBe(900);
   });
 
+  it('allows production deploys without MPP_SECRET_KEY', () => {
+    setTestEnv({
+      NODE_ENV: 'production',
+      WALLET_AUTH_TOKEN_SECRET: '0123456789abcdef0123456789abcdef',
+      X402_PAY_TO: realPayTo,
+      X402_USDC_ASSET_ADDRESS: realUsdc
+    });
+
+    const config = getConfig();
+    expect(config.mppSecretKey).toBeUndefined();
+  });
+
   it('fails fast in production when MPP_SECRET_KEY is too short', () => {
     setTestEnv({
       NODE_ENV: 'production',
@@ -140,5 +152,36 @@ describe('config validation', () => {
     });
 
     expect(() => getConfig()).toThrow('WALLET_AUTH_TOKEN_TTL_SECONDS must be a positive integer');
+  });
+
+  it('parses new pricing env vars with defaults', () => {
+    setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret'
+    });
+
+    const config = getConfig();
+    expect(config.x402RatePerGbMonthUsd).toBe(0.10);
+    expect(config.x402MinPriceUsd).toBe(0.001);
+    expect(config.x402MaxPriceUsd).toBe(50.0);
+    expect(config.x402DefaultDurationMonths).toBe(1);
+    expect(config.x402MaxDurationMonths).toBe(24);
+  });
+
+  it('parses custom pricing env vars', () => {
+    setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
+      X402_RATE_PER_GB_MONTH_USD: '0.10',
+      X402_MIN_PRICE_USD: '0.002',
+      X402_MAX_PRICE_USD: '25.0',
+      X402_DEFAULT_DURATION_MONTHS: '6',
+      X402_MAX_DURATION_MONTHS: '12'
+    });
+
+    const config = getConfig();
+    expect(config.x402RatePerGbMonthUsd).toBe(0.10);
+    expect(config.x402MinPriceUsd).toBe(0.002);
+    expect(config.x402MaxPriceUsd).toBe(25.0);
+    expect(config.x402DefaultDurationMonths).toBe(6);
+    expect(config.x402MaxDurationMonths).toBe(12);
   });
 });

@@ -13,7 +13,13 @@ import {
 import type { MiddlewareHandler } from 'hono';
 import type { PaymentPayload } from '@x402/core/types';
 import { logger } from './logger';
-import { calculatePriceUsd, usdToAssetAmount } from './payment/pricing.js';
+import {
+  calculatePriceUsd,
+  parseDurationMonths,
+  parseNonNegativeInteger,
+  parseSizeBytesFromPinPayload,
+  usdToAssetAmount
+} from './payment/pricing.js';
 import {
   getWalletAuthToken,
   verifyWalletAuthToken,
@@ -22,7 +28,7 @@ import {
   type RequestOwnerIdentity,
 } from './wallet-auth.js';
 
-export { calculatePriceUsd } from './payment/pricing.js';
+export { calculatePriceUsd, parseDurationMonths } from './payment/pricing.js';
 
 export {
   getWalletAuthToken,
@@ -44,9 +50,11 @@ export interface X402PaymentConfig {
   usdcAssetDecimals: number;
   usdcDomainName: string;
   usdcDomainVersion: string;
-  basePriceUsd: number;
-  pricePerMbUsd: number;
+  ratePerGbMonthUsd: number;
+  minPriceUsd: number;
   maxPriceUsd: number;
+  defaultDurationMonths: number;
+  maxDurationMonths: number;
 }
 
 export const X402_SPEC_URL = 'https://www.x402.org/';
@@ -69,71 +77,32 @@ const RECOMMENDED_CLIENT_INSTALL = 'npm install @x402/fetch @x402/evm';
 const RECOMMENDED_CLIENT_PACKAGE = '@x402/fetch';
 type PaymentErrorStatus = 402 | 403 | 412;
 
-function parsePositiveInteger(raw: string | undefined): number | undefined {
-  if (!raw) {
-    return undefined;
-  }
-
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    return undefined;
-  }
-
-  return value;
-}
-
-function parseSizeFromPinBody(body: unknown): number | undefined {
-  if (!body || typeof body !== 'object') {
-    return undefined;
-  }
-
-  const bodyRecord = body as Record<string, unknown>;
-
-  const directSize = bodyRecord.sizeBytes;
-  if (typeof directSize === 'number' && Number.isFinite(directSize) && directSize >= 0) {
-    return Math.trunc(directSize);
-  }
-
-  const meta = bodyRecord.meta;
-  if (!meta || typeof meta !== 'object') {
-    return undefined;
-  }
-
-  const metaRecord = meta as Record<string, unknown>;
-  const metaSize = metaRecord.contentSizeBytes ?? metaRecord.sizeBytes;
-
-  if (typeof metaSize === 'string') {
-    return parsePositiveInteger(metaSize);
-  }
-
-  if (typeof metaSize === 'number' && Number.isFinite(metaSize) && metaSize >= 0) {
-    return Math.trunc(metaSize);
-  }
-
-  return undefined;
+function resolveDurationMonths(context: HTTPRequestContext, config: Pick<X402PaymentConfig, 'defaultDurationMonths' | 'maxDurationMonths'>): number {
+  return parseDurationMonths(context.adapter.getHeader('x-pin-duration-months'), config.defaultDurationMonths, config.maxDurationMonths);
 }
 
 async function resolvePinRequestSizeBytes(context: HTTPRequestContext): Promise<number> {
-  const headerSize =
-    parsePositiveInteger(context.adapter.getHeader('x-content-size-bytes')) ??
-    parsePositiveInteger(context.adapter.getHeader('content-length'));
-
-  if (headerSize !== undefined) {
-    return headerSize;
+  const explicitSize = parseNonNegativeInteger(context.adapter.getHeader('x-content-size-bytes'));
+  if (explicitSize !== undefined) {
+    return explicitSize;
   }
 
   const rawBody = context.adapter.getBody ? await context.adapter.getBody() : undefined;
-  return parseSizeFromPinBody(rawBody) ?? 0;
+  const bodySize = parseSizeBytesFromPinPayload(rawBody);
+  if (bodySize !== undefined) {
+    return bodySize;
+  }
+
+  return parseNonNegativeInteger(context.adapter.getHeader('content-length')) ?? 0;
 }
 
 function resolveUploadSizeBytes(context: HTTPRequestContext): number {
   return (
-    parsePositiveInteger(context.adapter.getHeader('x-content-size-bytes')) ??
-    parsePositiveInteger(context.adapter.getHeader('content-length')) ??
+    parseNonNegativeInteger(context.adapter.getHeader('x-content-size-bytes')) ??
+    parseNonNegativeInteger(context.adapter.getHeader('content-length')) ??
     0
   );
 }
-
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') {
@@ -249,12 +218,19 @@ function buildProtocolInfo(x402Version = 2) {
   };
 }
 
-function makeUnpaidResponseBody(description: string) {
+function makeUnpaidResponseBody(description: string, pricingConfig?: Pick<X402PaymentConfig, 'ratePerGbMonthUsd' | 'minPriceUsd' | 'defaultDurationMonths'>) {
   return () => ({
     contentType: 'application/json' as const,
     body: {
       error: 'Payment required',
       description,
+      ...(pricingConfig ? {
+        pricing: {
+          ratePerGbMonthUsd: pricingConfig.ratePerGbMonthUsd,
+          durationMonths: pricingConfig.defaultDurationMonths,
+          minPriceUsd: pricingConfig.minPriceUsd
+        }
+      } : {}),
       protocol: buildProtocolInfo(),
       client: buildRecommendedClientInfo(),
       note: 'Decode the base64 Payment-Required response header for full payment requirements. If your payment fails, the error reason is in that same header.'
@@ -499,13 +475,14 @@ export function createX402PaymentMiddleware(
         extra: exactTransferExtra,
         price: async (context: HTTPRequestContext) => {
           const sizeBytes = await resolvePinRequestSizeBytes(context);
-          const usdPrice = calculatePriceUsd(sizeBytes, config);
+          const durationMonths = resolveDurationMonths(context, config);
+          const usdPrice = calculatePriceUsd(sizeBytes, durationMonths, config);
           return usdToAssetAmount(usdPrice, config.usdcAssetAddress, config.usdcAssetDecimals);
         }
       },
       description: 'Create IPFS pin',
       mimeType: 'application/json',
-      unpaidResponseBody: makeUnpaidResponseBody('Pin a CID to IPFS.'),
+      unpaidResponseBody: makeUnpaidResponseBody('Pin a CID to IPFS.', config),
       settlementFailedResponseBody: makeSettlementFailedResponseBody()
     },
     'POST /upload': {
@@ -516,7 +493,7 @@ export function createX402PaymentMiddleware(
         extra: exactTransferExtra,
         price: (context: HTTPRequestContext) => {
           const sizeBytes = resolveUploadSizeBytes(context);
-          const usdPrice = calculatePriceUsd(sizeBytes, config);
+          const usdPrice = calculatePriceUsd(sizeBytes, 1, config);
           return usdToAssetAmount(usdPrice, config.usdcAssetAddress, config.usdcAssetDecimals);
         }
       },
@@ -539,7 +516,7 @@ export function createX402PaymentMiddleware(
         },
         price: async (context: HTTPRequestContext) => {
           const requirement = await resolveRetrievalRequirement(context, retrievalResolver);
-          const usdPrice = requirement?.priceUsd ?? config.basePriceUsd;
+          const usdPrice = requirement?.priceUsd ?? config.minPriceUsd;
           return usdToAssetAmount(usdPrice, config.usdcAssetAddress, config.usdcAssetDecimals);
         }
       },

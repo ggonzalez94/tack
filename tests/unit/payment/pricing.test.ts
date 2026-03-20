@@ -1,24 +1,79 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePriceUsd, usdToAssetAmount } from '../../../src/services/payment/pricing';
+import {
+  calculatePriceUsd,
+  parseDurationMonths,
+  parseNonNegativeInteger,
+  parseSizeBytesFromPinPayload,
+  usdToAssetAmount
+} from '../../../src/services/payment/pricing';
 
 describe('calculatePriceUsd', () => {
-  const config = { basePriceUsd: 0.001, pricePerMbUsd: 0.001, maxPriceUsd: 0.01 };
+  const config = {
+    ratePerGbMonthUsd: 0.10,
+    minPriceUsd: 0.001,
+    maxPriceUsd: 50.0
+  };
 
-  it('returns base price for files <= 1MB', () => {
-    expect(calculatePriceUsd(500_000, config)).toBe(0.001);
-    expect(calculatePriceUsd(1_000_000, config)).toBe(0.001);
+  it('returns the minimum price for tiny files', () => {
+    expect(calculatePriceUsd(500_000, 1, config)).toBe(0.001);
+    expect(calculatePriceUsd(1_000_000, 1, config)).toBe(0.001);
+    expect(calculatePriceUsd(0, 1, config)).toBe(0.001);
   });
 
-  it('adds per-MB cost for files > 1MB', () => {
-    expect(calculatePriceUsd(2_000_001, config)).toBe(0.003);
+  it('prices linearly by size and duration', () => {
+    const oneGb = 1_073_741_824;
+    expect(calculatePriceUsd(oneGb, 1, config)).toBeCloseTo(0.10, 6);
+    expect(calculatePriceUsd(oneGb, 6, config)).toBeCloseTo(0.60, 6);
+    expect(calculatePriceUsd(100 * 1_000_000, 6, config)).toBeCloseTo(0.056, 3);
   });
 
-  it('caps at max price', () => {
-    expect(calculatePriceUsd(100_000_000, config)).toBe(0.01);
+  it('caps the computed price', () => {
+    const tenGb = 10 * 1_073_741_824;
+    expect(calculatePriceUsd(tenGb, 24, config)).toBeCloseTo(24.0, 2);
+    expect(calculatePriceUsd(tenGb, 24, { ...config, maxPriceUsd: 5.0 })).toBe(5.0);
+  });
+});
+
+describe('parseDurationMonths', () => {
+  it('falls back to default for missing or invalid values', () => {
+    expect(parseDurationMonths(null, 1, 24)).toBe(1);
+    expect(parseDurationMonths(undefined, 6, 24)).toBe(6);
+    expect(parseDurationMonths('', 1, 24)).toBe(1);
+    expect(parseDurationMonths('0', 1, 24)).toBe(1);
+    expect(parseDurationMonths('1.5', 1, 24)).toBe(1);
+    expect(parseDurationMonths('abc', 1, 24)).toBe(1);
   });
 
-  it('returns base price for 0-byte files', () => {
-    expect(calculatePriceUsd(0, config)).toBe(0.001);
+  it('parses valid values and clamps to the max duration', () => {
+    expect(parseDurationMonths('1', 1, 24)).toBe(1);
+    expect(parseDurationMonths('12', 1, 24)).toBe(12);
+    expect(parseDurationMonths('25', 1, 24)).toBe(24);
+  });
+});
+
+describe('parseNonNegativeInteger', () => {
+  it('parses valid integers and rejects invalid values', () => {
+    expect(parseNonNegativeInteger('0')).toBe(0);
+    expect(parseNonNegativeInteger('42')).toBe(42);
+    expect(parseNonNegativeInteger('-1')).toBeUndefined();
+    expect(parseNonNegativeInteger('1.5')).toBeUndefined();
+    expect(parseNonNegativeInteger('abc')).toBeUndefined();
+  });
+});
+
+describe('parseSizeBytesFromPinPayload', () => {
+  it('uses top-level sizeBytes when present', () => {
+    expect(parseSizeBytesFromPinPayload({ cid: 'bafy-test', sizeBytes: 1234 })).toBe(1234);
+  });
+
+  it('falls back to metadata contentSizeBytes or sizeBytes', () => {
+    expect(parseSizeBytesFromPinPayload({ meta: { contentSizeBytes: '4567' } })).toBe(4567);
+    expect(parseSizeBytesFromPinPayload({ meta: { sizeBytes: 8910 } })).toBe(8910);
+  });
+
+  it('ignores malformed payloads', () => {
+    expect(parseSizeBytesFromPinPayload(null)).toBeUndefined();
+    expect(parseSizeBytesFromPinPayload({ meta: { contentSizeBytes: 'invalid' } })).toBeUndefined();
   });
 });
 
@@ -29,7 +84,7 @@ describe('usdToAssetAmount', () => {
     expect(result.asset).toBe('0x2222222222222222222222222222222222222222');
   });
 
-  it('returns minimum of 1 for very small amounts', () => {
+  it('returns a minimum asset amount of 1', () => {
     const result = usdToAssetAmount(0, '0x2222222222222222222222222222222222222222', 6);
     expect(Number(result.amount)).toBeGreaterThanOrEqual(1);
   });
