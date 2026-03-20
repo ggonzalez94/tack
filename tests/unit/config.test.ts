@@ -65,7 +65,8 @@ describe('config validation', () => {
       WALLET_AUTH_TOKEN_SECRET: '0123456789abcdef0123456789abcdef',
       X402_NETWORK: 'eip155:167000',
       X402_PAY_TO: realPayTo,
-      X402_USDC_ASSET_ADDRESS: realUsdc
+      X402_USDC_ASSET_ADDRESS: realUsdc,
+      MPP_SECRET_KEY: '0123456789abcdef0123456789abcdef'
     });
 
     const config = getConfig();
@@ -75,6 +76,30 @@ describe('config validation', () => {
     expect(config.walletAuthTokenAudience).toBe('tack-owner-api');
     expect(config.walletAuthTokenIssuer).toBe('tack');
     expect(config.walletAuthTokenTtlSeconds).toBe(900);
+  });
+
+  it('allows production deploys without MPP_SECRET_KEY', () => {
+    setTestEnv({
+      NODE_ENV: 'production',
+      WALLET_AUTH_TOKEN_SECRET: '0123456789abcdef0123456789abcdef',
+      X402_PAY_TO: realPayTo,
+      X402_USDC_ASSET_ADDRESS: realUsdc
+    });
+
+    const config = getConfig();
+    expect(config.mppSecretKey).toBeUndefined();
+  });
+
+  it('fails fast in production when MPP_SECRET_KEY is too short', () => {
+    setTestEnv({
+      NODE_ENV: 'production',
+      WALLET_AUTH_TOKEN_SECRET: '0123456789abcdef0123456789abcdef',
+      X402_PAY_TO: realPayTo,
+      X402_USDC_ASSET_ADDRESS: realUsdc,
+      MPP_SECRET_KEY: 'tooshort'
+    });
+
+    expect(() => getConfig()).toThrow('MPP_SECRET_KEY must be at least 32 bytes');
   });
 
   it('parses replica URL lists', () => {

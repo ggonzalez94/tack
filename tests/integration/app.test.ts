@@ -989,8 +989,13 @@ describe('API integration', () => {
         x402UsdcAssetAddress: '0x2222222222222222222222222222222222222222',
         x402RatePerGbMonthUsd: 0.10,
         x402MinPriceUsd: 0.001,
+        x402MaxPriceUsd: 50.0,
         x402DefaultDurationMonths: 1,
-        x402MaxDurationMonths: 24
+        x402MaxDurationMonths: 24,
+        mppMethod: 'tempo',
+        mppChainId: 4217,
+        mppAsset: '0x20C000000000000000000000b9537d11c60E8b50',
+        mppAssetSymbol: 'USDC.e'
       }
     });
 
@@ -998,10 +1003,14 @@ describe('API integration', () => {
     expect(response.status).toBe(200);
 
     const card = (await response.json()) as {
+      payments: {
+        protocols: Array<{ protocol: string; chainId: number }>;
+      };
       pricing: {
         pinning: {
           ratePerGbMonthUsd: number;
           minPriceUsd: number;
+          maxPriceUsd: number;
           defaultDurationMonths: number;
           maxDurationMonths: number;
           durationHeader: string;
@@ -1011,9 +1020,11 @@ describe('API integration', () => {
 
     expect(card.pricing.pinning.ratePerGbMonthUsd).toBe(0.10);
     expect(card.pricing.pinning.minPriceUsd).toBe(0.001);
+    expect(card.pricing.pinning.maxPriceUsd).toBe(50.0);
     expect(card.pricing.pinning.defaultDurationMonths).toBe(1);
     expect(card.pricing.pinning.maxDurationMonths).toBe(24);
     expect(card.pricing.pinning.durationHeader).toBe('X-Pin-Duration-Months');
+    expect(card.payments.protocols.map((protocol) => protocol.protocol)).toEqual(['x402', 'mpp']);
   });
 
   it('enforces wallet ownership when listing and deleting pins', async () => {

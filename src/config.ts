@@ -30,6 +30,7 @@ export interface AppConfig {
   x402MaxPriceUsd: number;
   x402DefaultDurationMonths: number;
   x402MaxDurationMonths: number;
+  mppSecretKey?: string;
 }
 
 const PLACEHOLDER_EVM_ADDRESSES = new Set([
@@ -150,6 +151,10 @@ function validateProductionConfig(config: AppConfig): void {
   if (isPlaceholderEvmAddress(config.x402UsdcAssetAddress)) {
     throw new Error('Invalid production configuration: X402_USDC_ASSET_ADDRESS must be a real token address');
   }
+
+  if (config.mppSecretKey && config.mppSecretKey.length < 32) {
+    throw new Error('Invalid production configuration: MPP_SECRET_KEY must be at least 32 bytes');
+  }
 }
 
 export function getConfig(): AppConfig {
@@ -157,6 +162,8 @@ export function getConfig(): AppConfig {
   if (!walletAuthTokenSecret) {
     throw new Error('Missing required environment variable: WALLET_AUTH_TOKEN_SECRET');
   }
+
+  const mppSecretKey = process.env.MPP_SECRET_KEY?.trim() || undefined;
 
   const config: AppConfig = {
     port: Number(process.env.PORT ?? 3000),
@@ -201,7 +208,8 @@ export function getConfig(): AppConfig {
     x402MinPriceUsd: parseNumber(process.env.X402_MIN_PRICE_USD, 0.001, 'X402_MIN_PRICE_USD'),
     x402MaxPriceUsd: parseNumber(process.env.X402_MAX_PRICE_USD, 50.0, 'X402_MAX_PRICE_USD'),
     x402DefaultDurationMonths: parsePositiveInteger(process.env.X402_DEFAULT_DURATION_MONTHS, 1, 'X402_DEFAULT_DURATION_MONTHS'),
-    x402MaxDurationMonths: parsePositiveInteger(process.env.X402_MAX_DURATION_MONTHS, 24, 'X402_MAX_DURATION_MONTHS')
+    x402MaxDurationMonths: parsePositiveInteger(process.env.X402_MAX_DURATION_MONTHS, 24, 'X402_MAX_DURATION_MONTHS'),
+    mppSecretKey
   };
 
   if (!Number.isInteger(config.walletAuthTokenTtlSeconds) || config.walletAuthTokenTtlSeconds <= 0) {
