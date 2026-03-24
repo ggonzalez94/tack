@@ -26,8 +26,9 @@ Persistent volumes:
 
 ### `tack-ipfs`
 
-- Source: deploy from image `ipfs/kubo:latest`.
+- Source: this repository, `kubo/Dockerfile` (wraps `ipfs/kubo:latest` with announce config).
 - Internal port for RPC: `5001`.
+- **Public TCP port for swarm: `4001`** (required for IPFS P2P / DHT discoverability — see § Swarm Networking below).
 - Optional public port for gateway: `8080` (only if you want direct gateway access).
 - Mount persistent volume at `/data/ipfs`.
 
@@ -57,7 +58,45 @@ Set these in Railway Variables.
 | `X402_PRICE_PER_MB_USD` | `0.001` | Variable price by payload size. |
 | `X402_MAX_PRICE_USD` | `0.01` | Price ceiling per request. |
 
-## 3) Persistent Storage Strategy
+## 3) Swarm Networking (IPFS P2P Discoverability)
+
+Without a publicly-reachable swarm port, pinned content is only accessible through the Tack API (`/ipfs/:cid`). Public IPFS gateways (ipfs.io, dweb.link) will find the provider record in the DHT but fail to connect — returning 504 timeouts.
+
+### Setup on Railway
+
+1. **Expose port 4001 as a public TCP service** on the `tack-ipfs` Railway service.
+   - Railway will assign a public address like `monorail.proxy.rlwy.net:12345`.
+2. **Set the `IPFS_ANNOUNCE_ADDRESS` environment variable** on `tack-ipfs` to the multiaddr form of that public address:
+   ```
+   IPFS_ANNOUNCE_ADDRESS=/dns4/monorail.proxy.rlwy.net/tcp/12345
+   ```
+   Replace the hostname and port with the actual values Railway assigns.
+3. **Redeploy** the `tack-ipfs` service. The `kubo/configure-announce.sh` init script will configure Kubo to advertise this address in the DHT.
+
+### Verification
+
+After deploying, SSH into the Kubo container and check:
+
+```bash
+# Confirm announce address is set
+ipfs config Addresses.AppendAnnounce
+# Should show: ["/dns4/<hostname>/tcp/<port>"]
+
+# Verify the node sees itself as reachable
+ipfs id
+# "Addresses" should include the public /dns4/... address
+
+# Quick connectivity test from another machine
+ipfs swarm connect /dns4/<hostname>/tcp/<port>/p2p/<peer-id>
+```
+
+Content should become retrievable on public gateways within a few minutes of the node re-establishing DHT presence.
+
+### Note on redeploys
+
+Railway may reassign the public TCP address on service recreation (not on normal redeploys). If the public address changes, update `IPFS_ANNOUNCE_ADDRESS` accordingly.
+
+## 4) Persistent Storage Strategy
 
 - Keep SQLite at `/app/data/tack.db` on Railway volume.
 - Run API with a single replica to avoid SQLite file locking/consistency issues.
@@ -110,7 +149,9 @@ When a release causes issues:
 8. `/health` stable at `200` over repeated checks.
 9. End-to-end smoke passes (`pnpm smoke:x402`) against Railway URL.
 10. Manual pin/list/get/delete flow works with the issued owner bearer token.
-11. Rollback owner and backup location documented before launch.
+11. `IPFS_ANNOUNCE_ADDRESS` set on `tack-ipfs` with the Railway public TCP address for port 4001.
+12. Pinned content reachable via `https://dweb.link/ipfs/<cid>` (may take a few minutes after deploy).
+13. Rollback owner and backup location documented before launch.
 
 ## 8) Production Limitations & Upgrade Path
 
@@ -120,7 +161,7 @@ Current known limitations of this Railway deployment:
 | --- | --- | --- |
 | **SQLite single-writer** | API cannot scale beyond 1 replica | Write contention under load (a good problem) |
 | **Railway volumes are single-AZ** | No automatic recovery if the volume is lost | When uptime SLA is required |
-| **Kubo on Railway has ephemeral networking** | Peer table and DHT presence reset on every deploy; poor P2P discoverability | Kubo health check failures post-deploy, or content retrieval latency degrades |
+| **Kubo on Railway has ephemeral networking** | Peer table resets on every deploy; DHT re-establishment takes a few minutes. Mitigated by `IPFS_ANNOUNCE_ADDRESS` (see § Swarm Networking) | Kubo health check failures post-deploy, or content retrieval latency degrades |
 | **No automated backups** | Manual `scripts/backup-db.sh` before deploys; Kubo volume has no snapshot automation | When data loss risk becomes unacceptable |
 | **Single IPFS node, no replication** | Pinned content lives on one Kubo instance | When data durability matters to users |
 
