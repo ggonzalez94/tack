@@ -84,7 +84,7 @@ mainnet/tack/
 - imagePullPolicy: Always
 - Replicas: 1 (SQLite single-writer constraint)
 - Port: 3000
-- Volume: 10Gi PD-Standard at `/app/data` (SQLite DB)
+- Volume: 10Gi PD-Standard (`standard-rwo`) at `/app/data` (SQLite DB)
 - Resources: requests 250m/256Mi, limits 500m/512Mi
 - Security: runAsNonRoot, runAsUser/Group 1000, fsGroup 1000
 - Env: ConfigMap (via envFrom), Secret `tack` for `WALLET_AUTH_TOKEN_SECRET`
@@ -102,7 +102,7 @@ mainnet/tack/
 - imagePullPolicy: Always
 - Replicas: 1
 - Ports: 4001 (swarm), 5001 (RPC), 8080 (gateway)
-- Volume: 100Gi PD-Standard at `/data/ipfs` (IPFS blocks)
+- Volume: 100Gi PD-Standard (`standard-rwo`) at `/data/ipfs` (IPFS blocks)
 - Resources: requests 500m/1Gi, limits 1000m/2Gi
 - Security: runAsNonRoot (Kubo image runs as user `kubo`, UID 1000 by default), fsGroup 1000
 - Env: `IPFS_ANNOUNCE_ADDRESS` from values for DHT discoverability
