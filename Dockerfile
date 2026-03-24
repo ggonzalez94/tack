@@ -22,11 +22,8 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/pnpm-lock.yaml* ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-RUN mkdir -p ./data && \
-    addgroup --gid 1000 tack && \
-    adduser --uid 1000 --gid 1000 --disabled-password --gecos "" tack && \
-    chown -R tack:tack /app
-USER tack
+RUN mkdir -p ./data && chown -R node:node /app
+USER node
 
 EXPOSE 3000
 
