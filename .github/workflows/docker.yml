@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build-tack-api:
     name: Build and push tack-api
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 20
 
     steps:
@@ -57,7 +57,7 @@ jobs:
 
   build-tack-kubo:
     name: Build and push tack-kubo
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 20
 
     steps:

@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 25
 
     steps:
@@ -64,7 +64,7 @@ jobs:
 
   github-release:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 10
     permissions:
       contents: write

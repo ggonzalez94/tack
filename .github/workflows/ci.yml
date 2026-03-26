@@ -16,7 +16,7 @@ concurrency:
 jobs:
   verify:
     name: verify
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 15
 
     steps:
@@ -47,7 +47,7 @@ jobs:
         run: pnpm build
 
   typos:
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 10
 
     steps:
@@ -58,7 +58,7 @@ jobs:
         uses: crate-ci/typos@v1
 
   docker-build:
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 20
 
     steps:
