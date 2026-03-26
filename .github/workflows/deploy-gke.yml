@@ -1,0 +1,254 @@
+name: deploy-gke
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy (example: v0.1.6)"
+        required: true
+        type: string
+      chart_ref:
+        description: Ref of taikoxyz/ecosystem-k8s-configs to deploy from
+        required: false
+        default: main
+        type: string
+      namespace:
+        description: Kubernetes namespace
+        required: false
+        default: mainnet
+        type: string
+      api_base_url:
+        description: "Public Tack base URL for post-deploy checks"
+        required: false
+        default: "https://tack.taiko.xyz"
+        type: string
+      run_paid_smoke:
+        description: Run paid x402 smoke after deployment when configured
+        required: false
+        default: true
+        type: boolean
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      chart_ref:
+        required: false
+        default: main
+        type: string
+      namespace:
+        required: false
+        default: mainnet
+        type: string
+      api_base_url:
+        required: false
+        default: "https://tack.taiko.xyz"
+        type: string
+      run_paid_smoke:
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      GCP_WORKLOAD_IDENTITY_PROVIDER:
+        required: false
+      GCP_SERVICE_ACCOUNT:
+        required: false
+      GCP_CREDENTIALS_JSON:
+        required: false
+      X402_SMOKE_PAYER_PRIVATE_KEY:
+        required: false
+      ECOSYSTEM_K8S_CONFIGS_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gke-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: ${{ inputs.api_base_url }}
+
+    steps:
+      - name: Checkout Tack
+        uses: actions/checkout@v6
+
+      - name: Checkout ecosystem-k8s-configs
+        uses: actions/checkout@v6
+        with:
+          repository: taikoxyz/ecosystem-k8s-configs
+          ref: ${{ inputs.chart_ref }}
+          path: ecosystem-k8s-configs
+          token: ${{ secrets.ECOSYSTEM_K8S_CONFIGS_TOKEN || github.token }}
+
+      - name: Validate deploy configuration
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}
+          GKE_CLUSTER_LOCATION: ${{ vars.GKE_CLUSTER_LOCATION }}
+          TACK_KUBO_SWARM_STATIC_IP: ${{ vars.TACK_KUBO_SWARM_STATIC_IP }}
+        run: |
+          set -euo pipefail
+          missing=()
+
+          for name in GCP_PROJECT_ID GKE_CLUSTER_NAME GKE_CLUSTER_LOCATION TACK_KUBO_SWARM_STATIC_IP; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required GitHub Actions variables: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud with Workload Identity
+        if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud with JSON key
+        if: ${{ !(secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '') && secrets.GCP_CREDENTIALS_JSON != '' }}
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
+      - name: Ensure Google Cloud auth is configured
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}" ] && [ -n "${GCP_SERVICE_ACCOUNT:-}" ]; then
+            exit 0
+          fi
+
+          if [ -n "${GCP_CREDENTIALS_JSON:-}" ]; then
+            exit 0
+          fi
+
+          echo "::error::Configure either Workload Identity (GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT) or GCP_CREDENTIALS_JSON."
+          exit 1
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" \
+            --region "$GKE_CLUSTER_LOCATION" \
+            --project "$GCP_PROJECT_ID"
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}
+          GKE_CLUSTER_LOCATION: ${{ vars.GKE_CLUSTER_LOCATION }}
+
+      - name: Deploy Helm release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          NAMESPACE: ${{ inputs.namespace }}
+          SWARM_STATIC_IP: ${{ vars.TACK_KUBO_SWARM_STATIC_IP }}
+          KUBO_ANNOUNCE_ADDRESS: ${{ vars.TACK_KUBO_ANNOUNCE_ADDRESS }}
+        run: |
+          set -euo pipefail
+
+          release_version="${RELEASE_TAG#v}"
+          announce_address="${KUBO_ANNOUNCE_ADDRESS:-/ip4/${SWARM_STATIC_IP}/tcp/4001}"
+
+          helm upgrade --install tack ./ecosystem-k8s-configs/mainnet/tack \
+            --namespace "$NAMESPACE" \
+            --create-namespace \
+            --set "api.image=us-central1-docker.pkg.dev/mainnet-trailblazer/tack/api:${release_version}" \
+            --set "kubo.image=us-central1-docker.pkg.dev/mainnet-trailblazer/tack/kubo:${release_version}" \
+            --set "kubo.swarmStaticIP=${SWARM_STATIC_IP}" \
+            --set-string "kubo.announceAddress=${announce_address}" \
+            --wait \
+            --atomic \
+            --timeout 15m
+
+      - name: Verify rollouts
+        env:
+          NAMESPACE: ${{ inputs.namespace }}
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" rollout status statefulset/tack-api --timeout=10m
+          kubectl -n "$NAMESPACE" rollout status statefulset/tack-kubo --timeout=10m
+
+      - name: Wait for health check
+        if: ${{ inputs.api_base_url != '' }}
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url }}
+        run: |
+          set -euo pipefail
+          base_url="${API_BASE_URL%/}"
+
+          for attempt in {1..20}; do
+            status_code="$(
+              curl \
+                --silent \
+                --show-error \
+                --location \
+                --output /tmp/tack-health.json \
+                --write-out '%{http_code}' \
+                "$base_url/health" || true
+            )"
+
+            if [ "$status_code" = "200" ]; then
+              cat /tmp/tack-health.json
+              exit 0
+            fi
+
+            echo "health check attempt $attempt/20 returned status $status_code"
+            sleep 15
+          done
+
+          echo "::error::Health check did not return 200 after deployment"
+          exit 1
+
+      - name: Setup Node.js
+        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        run: corepack enable
+
+      - name: Install dependencies for smoke
+        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Run paid x402 smoke test
+        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        env:
+          SMOKE_API_BASE_URL: ${{ inputs.api_base_url }}
+          SMOKE_RPC_URL: ${{ vars.X402_SMOKE_RPC_URL }}
+          SMOKE_CHAIN_ID: ${{ vars.X402_SMOKE_CHAIN_ID }}
+          SMOKE_CID: ${{ vars.X402_SMOKE_CID }}
+          SMOKE_PAYER_PRIVATE_KEY: ${{ secrets.X402_SMOKE_PAYER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          export SMOKE_API_BASE_URL="${SMOKE_API_BASE_URL%/}"
+          export SMOKE_RPC_URL="${SMOKE_RPC_URL:-https://rpc.mainnet.taiko.xyz}"
+          export SMOKE_CHAIN_ID="${SMOKE_CHAIN_ID:-167000}"
+          export SMOKE_CID="${SMOKE_CID:-bafkreiabfiu4ij6y7h5xj4yx4f2x7v2m2w6w63s3u5xyd4uxw5k2j7f7de}"
+
+          pnpm smoke:x402
