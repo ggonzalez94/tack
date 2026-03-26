@@ -43,6 +43,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=ref,event=tag
+            type=semver,pattern={{version}}
             type=sha
 
       - name: Build and push
@@ -83,6 +84,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=ref,event=tag
+            type=semver,pattern={{version}}
             type=sha
 
       - name: Build and push
