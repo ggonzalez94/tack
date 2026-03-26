@@ -89,6 +89,21 @@ jobs:
       - name: Checkout Tack
         uses: actions/checkout@v6
 
+      - name: Validate workflow dispatcher
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          case "$GITHUB_ACTOR" in
+            ggonzalez94|kimo-ice) ;;
+            *)
+              echo "::error::Manual deploy runs are restricted to ggonzalez94 and kimo-ice. Current actor: $GITHUB_ACTOR"
+              exit 1
+              ;;
+          esac
+
       - name: Checkout ecosystem-k8s-configs
         uses: actions/checkout@v6
         with:

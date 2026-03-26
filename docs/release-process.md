@@ -33,6 +33,15 @@ Repository secrets for deploy:
 - `X402_SMOKE_PAYER_PRIVATE_KEY` (optional)
 - `ECOSYSTEM_K8S_CONFIGS_TOKEN` (optional, only needed if that repo is private)
 
+Repository environment protection for manual workflows:
+- protect the `production` environment with required reviewers `@ggonzalez94` and `@kimo-ice`
+- keep deploy secrets scoped to that environment when possible
+- disable admin bypass if you want approvals to be enforced uniformly
+
+Repository review protection for workflow changes:
+- enable branch protection on `main` with `Require review from Code Owners`
+- `CODEOWNERS` covers `.github/workflows/**` and the deploy runbooks so workflow changes need review from `@ggonzalez94` or `@kimo-ice`
+
 ## Cut a release
 
 1. Update `package.json` to the next version.
@@ -47,6 +56,8 @@ git push origin v0.1.0
 
 5. Wait for `.github/workflows/docker.yml` to publish the `api` and `kubo` images for that tag.
 6. Run `.github/workflows/deploy-gke.yml` with `release_tag=vX.Y.Z`.
+
+Only `@ggonzalez94` and `@kimo-ice` can start the manual `deploy-gke` and `x402-taiko-smoke` workflows successfully. The workflows enforce that actor allowlist directly, and the `production` environment should also require review before execution.
 
 ## What the workflow does
 

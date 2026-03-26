@@ -30,9 +30,27 @@ jobs:
   smoke:
     runs-on: [arc-runner-set]
     timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ inputs.api_base_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Validate workflow dispatcher
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+
+          case "$GITHUB_ACTOR" in
+            ggonzalez94|kimo-ice) ;;
+            *)
+              echo "::error::Manual smoke runs are restricted to ggonzalez94 and kimo-ice. Current actor: $GITHUB_ACTOR"
+              exit 1
+              ;;
+          esac
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

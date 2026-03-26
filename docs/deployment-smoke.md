@@ -43,6 +43,10 @@ Optional:
 
 Use workflow `.github/workflows/x402-taiko-smoke.yml` via `workflow_dispatch`.
 
+Execution policy:
+- only `@ggonzalez94` and `@kimo-ice` are allowed to run the manual smoke workflow
+- the job should target the protected `production` environment so it pauses for environment approval before using deploy secrets
+
 Required:
 
 - Repo secret: `X402_SMOKE_PAYER_PRIVATE_KEY`
