@@ -109,20 +109,8 @@ jobs:
             exit 1
           fi
 
-      - name: Authenticate to Google Cloud with Workload Identity
-        if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
-        uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Authenticate to Google Cloud with JSON key
-        if: ${{ !(secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '') && secrets.GCP_CREDENTIALS_JSON != '' }}
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
-
-      - name: Ensure Google Cloud auth is configured
+      - name: Select Google Cloud auth mode
+        id: auth_mode
         env:
           GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
@@ -131,15 +119,30 @@ jobs:
           set -euo pipefail
 
           if [ -n "${GCP_WORKLOAD_IDENTITY_PROVIDER:-}" ] && [ -n "${GCP_SERVICE_ACCOUNT:-}" ]; then
+            echo "mode=wif" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [ -n "${GCP_CREDENTIALS_JSON:-}" ]; then
+            echo "mode=json" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "::error::Configure either Workload Identity (GCP_WORKLOAD_IDENTITY_PROVIDER + GCP_SERVICE_ACCOUNT) or GCP_CREDENTIALS_JSON."
           exit 1
+
+      - name: Authenticate to Google Cloud with Workload Identity
+        if: ${{ steps.auth_mode.outputs.mode == 'wif' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Authenticate to Google Cloud with JSON key
+        if: ${{ steps.auth_mode.outputs.mode == 'json' }}
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
@@ -221,22 +224,34 @@ jobs:
           echo "::error::Health check did not return 200 after deployment"
           exit 1
 
+      - name: Validate paid smoke secret
+        if: ${{ inputs.run_paid_smoke && inputs.api_base_url != '' }}
+        env:
+          SMOKE_PAYER_PRIVATE_KEY: ${{ secrets.X402_SMOKE_PAYER_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SMOKE_PAYER_PRIVATE_KEY:-}" ]; then
+            echo "::error::Missing secret X402_SMOKE_PAYER_PRIVATE_KEY"
+            exit 1
+          fi
+
       - name: Setup Node.js
-        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        if: ${{ inputs.run_paid_smoke && inputs.api_base_url != '' }}
         uses: actions/setup-node@v6
         with:
           node-version: 22
 
       - name: Enable Corepack
-        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        if: ${{ inputs.run_paid_smoke && inputs.api_base_url != '' }}
         run: corepack enable
 
       - name: Install dependencies for smoke
-        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        if: ${{ inputs.run_paid_smoke && inputs.api_base_url != '' }}
         run: pnpm install --frozen-lockfile
 
       - name: Run paid x402 smoke test
-        if: ${{ inputs.run_paid_smoke && secrets.X402_SMOKE_PAYER_PRIVATE_KEY != '' && inputs.api_base_url != '' }}
+        if: ${{ inputs.run_paid_smoke && inputs.api_base_url != '' }}
         env:
           SMOKE_API_BASE_URL: ${{ inputs.api_base_url }}
           SMOKE_RPC_URL: ${{ vars.X402_SMOKE_RPC_URL }}
