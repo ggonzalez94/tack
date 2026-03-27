@@ -14,7 +14,8 @@ import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
 import { getChainByName } from './services/payment/chains';
-import { extractIpfsCidFromPath, extractPaymentAuthorizationCredential } from './services/payment/http';
+import { createMppChallengeEnhancer } from './services/payment/challenge-enhancer';
+import { extractIpfsCidFromPath } from './services/payment/http';
 import { createMppInstance } from './services/payment/mpp';
 import { createMppPaymentMiddleware } from './services/payment/middleware';
 import {
@@ -181,39 +182,11 @@ const mppMiddleware: MiddlewareHandler | undefined = mppx
     })
   : undefined;
 
-// Challenge enhancer: adds MPP WWW-Authenticate header to x402 402 responses
 const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
-  ? async (c, next) => {
-      const priceUsd = await resolveMppPrice(c);
-      await next();
-
-      // If x402 returned 402, add the MPP challenge header too
-      if (c.res.status === 402 && extractPaymentAuthorizationCredential(c.req.header('Authorization')) === null) {
-        if (!priceUsd) {
-          return;
-        }
-
-        // Build a minimal synthetic request for challenge generation.
-        // Avoids passing c.req.raw whose body may already be consumed by x402.
-        // Omitting Authorization header forces a 402 challenge (no credential to verify).
-        const challengeReq = new Request(c.req.url, {
-          method: c.req.method,
-          headers: {},
-        });
-        const mppResult = await mppx.charge({ amount: priceUsd })(challengeReq);
-
-        if (mppResult.status === 402) {
-          const mppChallenge = mppResult.challenge;
-          const wwwAuth = mppChallenge.headers.get('WWW-Authenticate');
-          if (wwwAuth) {
-            const existingBody = await c.res.text();
-            const headers = new Headers(c.res.headers);
-            headers.set('WWW-Authenticate', wwwAuth);
-            c.res = new Response(existingBody, { status: 402, headers });
-          }
-        }
-      }
-    }
+  ? createMppChallengeEnhancer({
+      mppx,
+      priceFn: resolveMppPrice,
+    })
   : undefined;
 
 const app = createApp({
