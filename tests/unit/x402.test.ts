@@ -300,7 +300,7 @@ describe('x402 middleware', () => {
 
   it('uses the normalized public URL in payment requirements', async () => {
     const app = new Hono();
-    app.use(createExternalRequestUrlMiddleware({ publicBaseUrl: 'https://tack-api-production.up.railway.app' }));
+    app.use(createExternalRequestUrlMiddleware({ publicBaseUrl: 'https://tack.taiko.xyz' }));
     app.use(createX402PaymentMiddleware(testConfig, mockFacilitator));
     app.post('/pins', (c) => c.json({ ok: true }));
 
@@ -319,7 +319,7 @@ describe('x402 middleware', () => {
     expect(paymentRequiredHeader).toBeTruthy();
 
     const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader!);
-    expect(paymentRequired.resource?.url).toBe('https://tack-api-production.up.railway.app/pins');
+    expect(paymentRequired.resource?.url).toBe('https://tack.taiko.xyz/pins');
   });
 
   it('enforces optional retrieval paywall with dynamic owner payout', async () => {
