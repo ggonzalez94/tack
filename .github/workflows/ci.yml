@@ -16,7 +16,7 @@ concurrency:
 jobs:
   verify:
     name: verify
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 15
 
     steps:
@@ -47,18 +47,21 @@ jobs:
         run: pnpm build
 
   typos:
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install wget
+        run: sudo apt-get update && sudo apt-get install -y wget
+
       - name: Check spelling
         uses: crate-ci/typos@v1
 
   docker-build:
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 20
 
     steps:

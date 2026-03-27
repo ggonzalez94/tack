@@ -1,10 +1,14 @@
 services:
   ipfs:
-    image: ipfs/kubo:latest
+    build:
+      context: ./kubo
+      dockerfile: Dockerfile
     container_name: ipfs-kubo
     ports:
-      - "5001:5001"
-      - "8080:8080"
+      - "4001:4001"       # Swarm TCP (P2P / DHT discoverability)
+      - "4001:4001/udp"   # Swarm QUIC
+      - "5001:5001"       # RPC API
+      - "8080:8080"       # HTTP Gateway
     volumes:
       - ipfs_staging:/export
       - ipfs_data:/data/ipfs

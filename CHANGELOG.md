@@ -11,6 +11,18 @@ Format:
 
 - None yet.
 
+## [v0.1.6] - 2026-03-26
+
+### Added
+- Added Docker image publishing for both the Tack API and the companion Kubo image to Google Artifact Registry.
+
+### Changed
+- Pinning prices now scale linearly with file size and requested retention duration, and expired pins are automatically cleaned up after their paid term ends.
+- Deployment artifacts are now oriented around containerized Kubernetes rollouts, including hardened non-root runtime defaults and semver-tagged image publishing.
+
+### Fixed
+- Kubo can now advertise its configured public swarm address so pinned content is reachable through public IPFS gateway discovery flows.
+
 ## [v0.1.4] - 2026-03-16
 
 ### Added
@@ -64,7 +76,8 @@ Format:
 ### Docs
 - Added Railway deployment and Taiko x402 smoke runbooks covering volumes, backups, rollback, and go-live validation.
 
-[Unreleased]: https://github.com/taikoxyz/tack/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/taikoxyz/tack/compare/v0.1.6...HEAD
+[v0.1.6]: https://github.com/taikoxyz/tack/releases/tag/v0.1.6
 [v0.1.4]: https://github.com/taikoxyz/tack/releases/tag/v0.1.4
 [v0.1.3]: https://github.com/taikoxyz/tack/releases/tag/v0.1.3
 [v0.1.2]: https://github.com/taikoxyz/tack/releases/tag/v0.1.2

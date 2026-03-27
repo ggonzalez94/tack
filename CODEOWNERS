@@ -1,0 +1,4 @@
+# Protect operational controls and deploy runbooks.
+/.github/workflows/** @ggonzalez94 @kimo-ice
+/docs/release-process.md @ggonzalez94 @kimo-ice
+/docs/deployment-smoke.md @ggonzalez94 @kimo-ice

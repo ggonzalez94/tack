@@ -14,12 +14,15 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [arc-runner-set]
     timeout-minutes: 25
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Install wget
+        run: sudo apt-get update && sudo apt-get install -y wget
 
       - name: Check spelling
         uses: crate-ci/typos@v1
@@ -62,120 +65,9 @@ jobs:
       - name: Build deploy image
         run: docker build --tag tack:release .
 
-  deploy:
-    needs: verify
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment:
-      name: production
-      url: ${{ vars.RAILWAY_API_BASE_URL }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Enable Corepack
-        run: corepack enable
-
-      - name: Validate release configuration
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
-          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
-          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
-          RAILWAY_API_BASE_URL: ${{ vars.RAILWAY_API_BASE_URL }}
-        run: |
-          set -euo pipefail
-          missing=()
-
-          for name in RAILWAY_API_TOKEN RAILWAY_PROJECT_ID RAILWAY_ENVIRONMENT_ID RAILWAY_SERVICE_ID RAILWAY_API_BASE_URL; do
-            if [ -z "${!name:-}" ]; then
-              missing+=("$name")
-            fi
-          done
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::Missing required GitHub Actions configuration: ${missing[*]}"
-            exit 1
-          fi
-
-      - name: Deploy to Railway
-        env:
-          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
-          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
-          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
-          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
-        run: |
-          set -euo pipefail
-          pnpm dlx @railway/cli@latest up --ci \
-            --project "$RAILWAY_PROJECT_ID" \
-            --environment "$RAILWAY_ENVIRONMENT_ID" \
-            --service "$RAILWAY_SERVICE_ID" \
-            --message "Release $GITHUB_REF_NAME"
-
-      - name: Wait for health check
-        env:
-          RAILWAY_API_BASE_URL: ${{ vars.RAILWAY_API_BASE_URL }}
-        run: |
-          set -euo pipefail
-          base_url="${RAILWAY_API_BASE_URL%/}"
-
-          for attempt in {1..20}; do
-            status_code="$(
-              curl \
-                --silent \
-                --show-error \
-                --location \
-                --output /tmp/tack-health.json \
-                --write-out '%{http_code}' \
-                "$base_url/health" || true
-            )"
-
-            if [ "$status_code" = "200" ]; then
-              cat /tmp/tack-health.json
-              exit 0
-            fi
-
-            echo "health check attempt $attempt/20 returned status $status_code"
-            sleep 15
-          done
-
-          echo "::error::Health check did not return 200 after deployment"
-          exit 1
-
-      - name: Run paid x402 smoke test when configured
-        env:
-          SMOKE_API_BASE_URL: ${{ vars.RAILWAY_API_BASE_URL }}
-          SMOKE_RPC_URL: ${{ vars.X402_SMOKE_RPC_URL }}
-          SMOKE_CHAIN_ID: ${{ vars.X402_SMOKE_CHAIN_ID }}
-          SMOKE_CID: ${{ vars.X402_SMOKE_CID }}
-          SMOKE_PAYER_PRIVATE_KEY: ${{ secrets.X402_SMOKE_PAYER_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${SMOKE_PAYER_PRIVATE_KEY:-}" ]; then
-            echo "X402_SMOKE_PAYER_PRIVATE_KEY not set; skipping paid smoke test."
-            exit 0
-          fi
-
-          pnpm install --frozen-lockfile
-
-          export SMOKE_API_BASE_URL="${SMOKE_API_BASE_URL%/}"
-          export SMOKE_RPC_URL="${SMOKE_RPC_URL:-https://rpc.mainnet.taiko.xyz}"
-          export SMOKE_CHAIN_ID="${SMOKE_CHAIN_ID:-167000}"
-          export SMOKE_CID="${SMOKE_CID:-bafkreiabfiu4ij6y7h5xj4yx4f2x7v2m2w6w63s3u5xyd4uxw5k2j7f7de}"
-          export SMOKE_PAYER_PRIVATE_KEY
-
-          pnpm smoke:x402
-
   github-release:
-    needs: deploy
-    runs-on: ubuntu-latest
+    needs: verify
+    runs-on: [arc-runner-set]
     timeout-minutes: 10
     permissions:
       contents: write

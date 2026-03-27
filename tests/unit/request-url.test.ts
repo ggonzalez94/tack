@@ -5,7 +5,7 @@ import { createExternalRequestUrlMiddleware, getExternalRequestUrl } from '../..
 describe('request URL helpers', () => {
   it('ignores forwarded headers when proxy trust is disabled', () => {
     const headers = new Headers({
-      'x-forwarded-host': 'tack-api-production.up.railway.app',
+      'x-forwarded-host': 'tack.taiko.xyz',
       'x-forwarded-proto': 'https'
     });
 
@@ -14,7 +14,7 @@ describe('request URL helpers', () => {
 
   it('uses x-forwarded host, proto, and port when proxy trust is enabled', () => {
     const headers = new Headers({
-      'x-forwarded-host': 'tack-api-production.up.railway.app',
+      'x-forwarded-host': 'tack.taiko.xyz',
       'x-forwarded-port': '8443',
       'x-forwarded-proto': 'https'
     });
@@ -24,13 +24,13 @@ describe('request URL helpers', () => {
       trustedProxyCidrs: ['10.0.0.0/8'],
       remoteAddress: '10.0.0.4'
     }).toString()).toBe(
-      'https://tack-api-production.up.railway.app:8443/pins'
+      'https://tack.taiko.xyz:8443/pins'
     );
   });
 
   it('prefers the standard Forwarded header when present', () => {
     const headers = new Headers({
-      forwarded: 'for=203.0.113.10;proto=https;host=tack-api-production.up.railway.app:8443'
+      forwarded: 'for=203.0.113.10;proto=https;host=tack.taiko.xyz:8443'
     });
 
     expect(getExternalRequestUrl('http://localhost/pins', headers, {
@@ -38,13 +38,13 @@ describe('request URL helpers', () => {
       trustedProxyCidrs: ['10.0.0.0/8'],
       remoteAddress: '10.0.0.4'
     }).toString()).toBe(
-      'https://tack-api-production.up.railway.app:8443/pins'
+      'https://tack.taiko.xyz:8443/pins'
     );
   });
 
   it('ignores forwarded headers from untrusted proxy addresses', () => {
     const headers = new Headers({
-      'x-forwarded-host': 'tack-api-production.up.railway.app',
+      'x-forwarded-host': 'tack.taiko.xyz',
       'x-forwarded-proto': 'https'
     });
 
