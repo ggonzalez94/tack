@@ -13,6 +13,7 @@ import {
 import type { MiddlewareHandler } from 'hono';
 import type { PaymentPayload } from '@x402/core/types';
 import { logger } from './logger';
+import type { PaymentResult } from './payment/types.js';
 import {
   calculatePriceUsd,
   parseDurationMonths,
@@ -356,7 +357,8 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
 
   return async (c, next) => {
     // Skip x402 payment if MPP already handled it
-    if ((c as any).get('paymentResult')) {
+    const paymentResult = c.get('paymentResult') as PaymentResult | undefined;
+    if (paymentResult) {
       return next();
     }
 

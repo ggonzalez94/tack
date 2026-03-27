@@ -1,12 +1,17 @@
 import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
-import { createMppPaymentMiddleware } from '../../../src/services/payment/middleware';
+import {
+  createMppPaymentMiddleware,
+  type MppChargeResult,
+  type MppxChargeHandler
+} from '../../../src/services/payment/middleware';
 import type { PaymentResult } from '../../../src/services/payment/types';
 
 // Mock mppx charge handler
-function createMockMppx(chargeResult: unknown) {
+function createMockMppx(chargeResult: MppChargeResult): MppxChargeHandler {
+  const handler = vi.fn(() => Promise.resolve(chargeResult));
   return {
-    charge: vi.fn().mockReturnValue(vi.fn().mockResolvedValue(chargeResult)),
+    charge: vi.fn(() => handler),
   };
 }
 
@@ -16,7 +21,7 @@ describe('createMppPaymentMiddleware', () => {
 
     const app = new Hono();
     const middleware = createMppPaymentMiddleware({
-      mppx: mockMppx as any,
+      mppx: mockMppx,
       priceFn: () => '0.001',
       extractWallet: () => '0xabcdef1234567890abcdef1234567890abcdef12',
     });
@@ -37,13 +42,14 @@ describe('createMppPaymentMiddleware', () => {
       return new Response(res.body, { status: res.status, headers: newHeaders });
     });
     const mockMppx = createMockMppx({ status: 200, withReceipt });
+    const extractWallet = vi.fn(() => '0xabcdef1234567890abcdef1234567890abcdef12');
 
     type Env = { Variables: { paymentResult?: PaymentResult } };
     const app = new Hono<Env>();
     const middleware = createMppPaymentMiddleware({
-      mppx: mockMppx as any,
+      mppx: mockMppx,
       priceFn: () => '0.001',
-      extractWallet: () => '0xabcdef1234567890abcdef1234567890abcdef12',
+      extractWallet,
     });
 
     app.get('/test', middleware, (c) => {
@@ -52,14 +58,15 @@ describe('createMppPaymentMiddleware', () => {
     });
 
     const res = await app.request('/test', {
-      headers: { 'Authorization': 'Payment eyJ0ZXN0IjoiY3JlZGVudGlhbCJ9' },
+      headers: { 'Authorization': 'payment eyJ0ZXN0IjoiY3JlZGVudGlhbCJ9' },
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json() as any;
+    const body = (await res.json()) as { wallet?: string; protocol?: string };
     expect(body.wallet).toBe('0xabcdef1234567890abcdef1234567890abcdef12');
     expect(body.protocol).toBe('mpp');
     expect(res.headers.get('Payment-Receipt')).toBe('test-receipt');
+    expect(extractWallet).toHaveBeenCalledWith('eyJ0ZXN0IjoiY3JlZGVudGlhbCJ9');
   });
 
   it('returns 402 when MPP credential is present but invalid', async () => {
@@ -71,7 +78,7 @@ describe('createMppPaymentMiddleware', () => {
 
     const app = new Hono();
     const middleware = createMppPaymentMiddleware({
-      mppx: mockMppx as any,
+      mppx: mockMppx,
       priceFn: () => '0.001',
       extractWallet: () => '0xabcdef1234567890abcdef1234567890abcdef12',
     });
@@ -90,7 +97,7 @@ describe('createMppPaymentMiddleware', () => {
 
     const app = new Hono();
     const middleware = createMppPaymentMiddleware({
-      mppx: mockMppx as any,
+      mppx: mockMppx,
       priceFn: () => null,
       extractWallet: () => '0xabcdef1234567890abcdef1234567890abcdef12',
     });

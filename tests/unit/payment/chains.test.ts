@@ -1,6 +1,6 @@
 // tests/unit/payment/chains.test.ts
 import { describe, expect, it } from 'vitest';
-import { paymentChains, getChainByName, getChainByProtocol } from '../../../src/services/payment/chains';
+import { getChainByName, getChainByProtocol } from '../../../src/services/payment/chains';
 
 describe('paymentChains', () => {
   it('includes taiko with x402 protocol', () => {

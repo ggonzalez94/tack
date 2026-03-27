@@ -14,6 +14,7 @@ import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
 import { getChainByName } from './services/payment/chains';
+import { extractIpfsCidFromPath, extractPaymentAuthorizationCredential } from './services/payment/http';
 import { createMppInstance } from './services/payment/mpp';
 import { createMppPaymentMiddleware } from './services/payment/middleware';
 import {
@@ -111,7 +112,7 @@ async function resolvePinPriceUsd(c: Context): Promise<number> {
   }
 
   try {
-    const body = await c.req.raw.clone().json();
+    const body: unknown = await c.req.raw.clone().json();
     const bodySize = parseSizeBytesFromPinPayload(body);
     if (bodySize !== undefined) {
       return calculatePriceUsd(bodySize, durationMonths, paymentPricingConfig);
@@ -152,7 +153,7 @@ async function resolveMppPrice(c: Context): Promise<string | null> {
     return String(resolveUploadPriceUsd(c));
   }
 
-  const cidParam = c.req.param('cid');
+  const cidParam = extractIpfsCidFromPath(c.req.path);
   if (cidParam && c.req.method === 'GET') {
     const policy = pinningService.resolveRetrievalPaymentPolicy(cidParam);
     if (!policy || policy.priceUsd <= 0) {
@@ -170,8 +171,8 @@ const mppMiddleware: MiddlewareHandler | undefined = mppx
   ? createMppPaymentMiddleware({
       mppx,
       priceFn: resolveMppPrice,
-      extractWallet: (authHeader: string) => {
-        const credential = Credential.deserialize(authHeader);
+      extractWallet: (serializedCredential: string) => {
+        const credential = Credential.deserialize(serializedCredential);
         if (!credential.source) {
           throw new Error('MPP credential missing source field — cannot determine payer wallet');
         }
@@ -187,7 +188,7 @@ const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
       await next();
 
       // If x402 returned 402, add the MPP challenge header too
-      if (c.res.status === 402 && !c.req.header('Authorization')?.startsWith('Payment ')) {
+      if (c.res.status === 402 && extractPaymentAuthorizationCredential(c.req.header('Authorization')) === null) {
         if (!priceUsd) {
           return;
         }
@@ -202,7 +203,7 @@ const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
         const mppResult = await mppx.charge({ amount: priceUsd })(challengeReq);
 
         if (mppResult.status === 402) {
-          const mppChallenge = mppResult.challenge as Response;
+          const mppChallenge = mppResult.challenge;
           const wwwAuth = mppChallenge.headers.get('WWW-Authenticate');
           if (wwwAuth) {
             const existingBody = await c.res.text();

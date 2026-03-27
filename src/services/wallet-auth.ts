@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { extractPaymentAuthorizationCredential } from './payment/http.js';
 
 export interface WalletAuthConfig {
   secret: string;
@@ -80,7 +81,7 @@ export function getWalletAuthToken(headers: Headers): { token: string | null; ma
   }
 
   // Recognize Payment scheme (MPP credential) — not malformed, handled elsewhere
-  if (trimmed.startsWith('Payment ')) {
+  if (extractPaymentAuthorizationCredential(trimmed) !== null) {
     return { token: null, malformed: false };
   }
 

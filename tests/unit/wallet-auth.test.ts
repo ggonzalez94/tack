@@ -9,6 +9,13 @@ describe('getWalletAuthToken', () => {
     expect(result.malformed).toBe(false);
   });
 
+  it('treats case-insensitive Payment auth headers as MPP credentials', () => {
+    const headers = new Headers({ 'Authorization': 'payment eyJjaGFsbGVuZ2Ui...' });
+    const result = getWalletAuthToken(headers);
+    expect(result.token).toBeNull();
+    expect(result.malformed).toBe(false);
+  });
+
   it('returns token for Authorization: Bearer header', () => {
     const headers = new Headers({ 'Authorization': 'Bearer my-jwt-token' });
     const result = getWalletAuthToken(headers);
