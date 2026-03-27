@@ -92,6 +92,42 @@ describe('createMppPaymentMiddleware', () => {
     expect(res.headers.get('WWW-Authenticate')).toContain('Payment');
   });
 
+  it('returns a challenge before charging when wallet extraction fails', async () => {
+    const requests: Request[] = [];
+    const mppx: MppxChargeHandler = {
+      charge: vi.fn(() => (req: Request) => {
+        requests.push(req);
+        return Promise.resolve({
+          status: 402,
+          challenge: new Response(JSON.stringify({ error: 'invalid' }), {
+            status: 402,
+            headers: { 'WWW-Authenticate': 'Payment id=\"test\", method=\"tempo\"' }
+          })
+        });
+      })
+    };
+
+    const app = new Hono();
+    const middleware = createMppPaymentMiddleware({
+      mppx,
+      priceFn: () => '0.001',
+      extractWallet: () => {
+        throw new Error('missing source');
+      },
+    });
+
+    app.get('/test', middleware, (c) => c.json({ ok: true }));
+    const res = await app.request('/test', {
+      headers: { 'Authorization': 'Payment invalid-credential' },
+    });
+
+    expect(res.status).toBe(402);
+    expect(requests).toHaveLength(1);
+    const [challengeRequest] = requests;
+    expect(challengeRequest).toBeDefined();
+    expect(challengeRequest?.headers.get('Authorization')).toBeNull();
+  });
+
   it('calls next() when priceFn returns null (free content)', async () => {
     const mockMppx = createMockMppx({ status: 402, challenge: new Response('', { status: 402 }) });
 

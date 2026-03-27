@@ -43,6 +43,21 @@ export function createMppPaymentMiddleware(config: MppPaymentMiddlewareConfig): 
       return next();
     }
 
+    let wallet: string;
+    try {
+      wallet = extractWallet(credential);
+    } catch {
+      const challengeReq = new Request(c.req.url, {
+        method: c.req.method,
+        headers: {},
+      });
+      const challengeResult = await mppx.charge({ amount: priceUsd })(challengeReq);
+      if (challengeResult.status === 402) {
+        return challengeResult.challenge;
+      }
+      return c.body(null, 402);
+    }
+
     // MPP credential present — verify and settle via mppx
     const result = await mppx.charge({ amount: priceUsd })(c.req.raw);
 
@@ -51,8 +66,6 @@ export function createMppPaymentMiddleware(config: MppPaymentMiddlewareConfig): 
       return result.challenge;
     }
 
-    // Payment verified + settled. Extract wallet and set context.
-    const wallet = extractWallet(credential);
     c.set('paymentResult' as any, {
       wallet,
       protocol: 'mpp',

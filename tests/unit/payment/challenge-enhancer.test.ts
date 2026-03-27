@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { encodePaymentRequiredHeader } from '@x402/core/http';
 import { describe, expect, it, vi } from 'vitest';
 import {
   type MppChargeResult,
@@ -22,7 +23,7 @@ describe('createMppChallengeEnhancer', () => {
     });
 
     const app = new Hono();
-    app.use(createMppChallengeEnhancer({ mppx, priceFn }));
+    app.use(createMppChallengeEnhancer({ mppx, priceFn, assetDecimals: 6 }));
     app.get('/pins', (c) => c.json({ ok: true }));
 
     const response = await app.request('http://localhost/pins');
@@ -34,6 +35,22 @@ describe('createMppChallengeEnhancer', () => {
 
   it('adds the MPP challenge for x402 402 responses when pricing is available', async () => {
     const priceFn = vi.fn(() => '0.001');
+    const paymentRequired = encodePaymentRequiredHeader({
+      x402Version: 2,
+      accepts: [{
+        scheme: 'exact',
+        network: 'eip155:167000',
+        maxAmountRequired: '1000',
+        amount: '1000',
+        asset: '0x2222222222222222222222222222222222222222',
+        payTo: '0x1111111111111111111111111111111111111111',
+        maxTimeoutSeconds: 60,
+        extra: {
+          name: 'USD Coin',
+          version: '2'
+        }
+      }]
+    });
     const mppx = createMockMppx({
       status: 402,
       challenge: new Response(JSON.stringify({ error: 'mpp required' }), {
@@ -43,13 +60,16 @@ describe('createMppChallengeEnhancer', () => {
     });
 
     const app = new Hono();
-    app.use(createMppChallengeEnhancer({ mppx, priceFn }));
-    app.get('/pins', (c) => c.json({ error: 'x402 required' }, 402));
+    app.use(createMppChallengeEnhancer({ mppx, priceFn, assetDecimals: 6 }));
+    app.get('/pins', (c) => {
+      c.header('payment-required', paymentRequired);
+      return c.json({ error: 'x402 required' }, 402);
+    });
 
     const response = await app.request('http://localhost/pins');
 
     expect(response.status).toBe(402);
-    expect(priceFn).toHaveBeenCalledTimes(1);
+    expect(priceFn).not.toHaveBeenCalled();
     expect(mppx.charge).toHaveBeenCalledTimes(1);
     expect(response.headers.get('WWW-Authenticate')).toContain('Payment');
     await expect(response.json()).resolves.toEqual({ error: 'x402 required' });

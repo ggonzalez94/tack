@@ -186,6 +186,7 @@ const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
   ? createMppChallengeEnhancer({
       mppx,
       priceFn: resolveMppPrice,
+      assetDecimals: config.x402UsdcAssetDecimals,
     })
   : undefined;
 
