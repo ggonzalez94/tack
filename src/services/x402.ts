@@ -84,18 +84,21 @@ function resolveDurationMonths(context: HTTPRequestContext, config: Pick<X402Pay
 }
 
 async function resolvePinRequestSizeBytes(context: HTTPRequestContext): Promise<number> {
-  const explicitSize = parseNonNegativeInteger(context.adapter.getHeader('x-content-size-bytes'));
-  if (explicitSize !== undefined) {
-    return explicitSize;
+  // Preserves the pre-refactor header priority: callers that set
+  // `x-content-size-bytes` or `content-length` are authoritative, and
+  // we only fall through to parsing the JSON pin payload when no size
+  // header is present. Reordering this changes the price that existing
+  // x402 clients see on `POST /pins`.
+  const headerSize =
+    parseNonNegativeInteger(context.adapter.getHeader('x-content-size-bytes')) ??
+    parseNonNegativeInteger(context.adapter.getHeader('content-length'));
+
+  if (headerSize !== undefined) {
+    return headerSize;
   }
 
   const rawBody = context.adapter.getBody ? await context.adapter.getBody() : undefined;
-  const bodySize = parseSizeBytesFromPinPayload(rawBody);
-  if (bodySize !== undefined) {
-    return bodySize;
-  }
-
-  return parseNonNegativeInteger(context.adapter.getHeader('content-length')) ?? 0;
+  return parseSizeBytesFromPinPayload(rawBody) ?? 0;
 }
 
 function resolveUploadSizeBytes(context: HTTPRequestContext): number {

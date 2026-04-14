@@ -15,7 +15,6 @@ import { createX402PaymentMiddleware } from './services/x402';
 import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
 import { logger } from './services/logger';
-import { getChainByName } from './services/payment/chains';
 import { createMppChallengeEnhancer } from './services/payment/challenge-enhancer';
 import { extractIpfsCidFromPath } from './services/payment/http';
 import { createMppInstance } from './services/payment/mpp';
@@ -94,10 +93,13 @@ const paymentMiddleware = createX402PaymentMiddleware({
 });
 
 // --- MPP (Machine Payment Protocol) on Tempo ---
-const tempoChain = getChainByName('tempo');
 const mppTestnet = config.mppTestnet;
 const tempoViemChain = mppTestnet ? tempoModerato : tempo;
-const tempoRpcUrl = config.mppTempoRpcUrl ?? tempoChain?.rpcUrl;
+// Fallback RPC must track the selected network — using the mainnet
+// endpoint while `tempoViemChain` is set to Moderato would point receipt
+// lookups at the wrong chain and turn every successful testnet charge
+// into a 500 during payer resolution.
+const tempoRpcUrl = config.mppTempoRpcUrl ?? tempoViemChain.rpcUrls.default.http[0];
 const mppx = config.mppSecretKey
   ? createMppInstance({
       payTo: config.x402PayTo,
@@ -132,7 +134,11 @@ const mppCurrencyAddress = (
     ? '0x20c0000000000000000000000000000000000000'
     : '0x20C000000000000000000000b9537d11c60E8b50'
 ) as `0x${string}`;
-const mppCurrencyDecimals = tempoChain?.asset.decimals ?? 6;
+const mppCurrencySymbol = mppTestnet ? 'pathUSD' : 'USDC.e';
+// TIP-20 stablecoins on Tempo (USDC.e, pathUSD, etc.) all use 6 decimals;
+// hardcoded here so the agent card and payer resolver stay in lockstep
+// with mppx's internal defaults (see `mppx/tempo/internal/defaults.ts`).
+const mppCurrencyDecimals = 6;
 
 const paymentPricingConfig: LinearPricingConfig = {
   ratePerGbMonthUsd: config.x402RatePerGbMonthUsd,
@@ -146,9 +152,15 @@ async function resolvePinPriceUsd(c: Context): Promise<number> {
     config.x402DefaultDurationMonths,
     config.x402MaxDurationMonths
   );
-  const explicitSize = parseNonNegativeInteger(c.req.header('x-content-size-bytes'));
-  if (explicitSize !== undefined) {
-    return calculatePriceUsd(explicitSize, durationMonths, paymentPricingConfig);
+
+  // Match the x402 priority order so both payment protocols charge the
+  // same price for the same request: size headers are authoritative, and
+  // the JSON pin payload is only consulted when neither header is set.
+  const headerSize =
+    parseNonNegativeInteger(c.req.header('x-content-size-bytes')) ??
+    parseNonNegativeInteger(c.req.header('content-length'));
+  if (headerSize !== undefined) {
+    return calculatePriceUsd(headerSize, durationMonths, paymentPricingConfig);
   }
 
   try {
@@ -158,11 +170,11 @@ async function resolvePinPriceUsd(c: Context): Promise<number> {
       return calculatePriceUsd(bodySize, durationMonths, paymentPricingConfig);
     }
   } catch {
-    // Fall back to the declared request size when the JSON pin payload is unavailable.
+    // Pin payload was not a parseable JSON body — fall through to the zero
+    // default, which calculatePriceUsd will clamp to minPriceUsd.
   }
 
-  const fallbackSize = parseNonNegativeInteger(c.req.header('content-length')) ?? 0;
-  return calculatePriceUsd(fallbackSize, durationMonths, paymentPricingConfig);
+  return calculatePriceUsd(0, durationMonths, paymentPricingConfig);
 }
 
 function resolveUploadPriceUsd(c: Context): number {
@@ -303,10 +315,10 @@ const app = createApp({
     x402MaxPriceUsd: config.x402MaxPriceUsd,
     x402DefaultDurationMonths: config.x402DefaultDurationMonths,
     x402MaxDurationMonths: config.x402MaxDurationMonths,
-    mppMethod: mppx ? tempoChain?.mpp?.method : undefined,
-    mppChainId: mppx ? tempoChain?.chainId : undefined,
-    mppAsset: mppx ? tempoChain?.asset.address : undefined,
-    mppAssetSymbol: mppx ? tempoChain?.asset.symbol : undefined
+    mppMethod: mppx ? 'tempo' : undefined,
+    mppChainId: mppx ? tempoViemChain.id : undefined,
+    mppAsset: mppx ? mppCurrencyAddress : undefined,
+    mppAssetSymbol: mppx ? mppCurrencySymbol : undefined
   }
 });
 
