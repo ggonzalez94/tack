@@ -11,6 +11,20 @@ Format:
 
 - None yet.
 
+## [v0.2.0] - 2026-04-14
+
+### Added
+- Tack now accepts dual-protocol payments on `POST /pins`, `POST /upload`, and paywalled `GET /ipfs/:cid`: existing x402 clients on Taiko keep working unchanged, and MPP (Machine Payment Protocol) clients can pay on Tempo using USDC.e. Unpaid requests receive a single `402` response advertising both protocols — x402 via the `payment-required` header and MPP via a standards-compliant `WWW-Authenticate: Payment` challenge — so either client can pay without a second round-trip.
+- The agent card at `/.well-known/agent.json` now publishes a `payments.protocols` array so agents can discover both protocols at once, including the Tempo chain ID, asset address, and asset symbol for the active network.
+- New opt-in env vars: `MPP_SECRET_KEY` (enables MPP, 32+ byte HMAC secret), `MPP_TESTNET` (switches to Tempo Moderato), and `MPP_TEMPO_RPC_URL` (overrides the default Tempo RPC used for on-chain payer verification).
+
+### Changed
+- Wallet-auth JWTs issued after an MPP-paid request work transparently on owner endpoints (`GET /pins`, `DELETE /pins/:id`), so clients using MPP get the same ownership flow as x402.
+- When MPP is not configured, the service is behavior-compatible with prior releases: the MPP middleware is never constructed, no Tempo RPC traffic is generated, and the agent card omits the MPP protocol block.
+
+### Security
+- **Ownership is derived from verified on-chain evidence, never from client-supplied credential metadata.** The MPP credential's optional `source` DID is client-controlled (spread unverified through `Credential.deserialize` and never checked by the Tempo `verify()` implementation), so trusting it would let a paying attacker forge `did:pkh:eip155:4217:<victim>` and mint owner-scoped JWTs for the victim. Tack now re-reads the settled Tempo transaction from RPC, locates the matching TIP-20 `Transfer`/`TransferWithMemo` event, and uses its `from` field as the canonical payer. Regression coverage lives in `tests/integration/app.test.ts > dual-protocol > ignores a forged credential.source`.
+
 ## [v0.1.6] - 2026-03-26
 
 ### Added
