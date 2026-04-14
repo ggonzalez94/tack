@@ -18,6 +18,12 @@ import {
   type WalletAuthConfig,
   type X402PaymentConfig
 } from '../../src/services/x402';
+import {
+  createMppPaymentMiddleware,
+  type MppxChargeHandler,
+  type ResolveVerifiedPayer
+} from '../../src/services/payment/middleware';
+import { createMppChallengeEnhancer } from '../../src/services/payment/challenge-enhancer';
 
 const walletA = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const walletB = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -985,12 +991,17 @@ describe('API integration', () => {
         name: 'Tack',
         description: 'Test agent',
         version: '0.0.1',
-        x402Network: 'eip155:167000',
+        x402Network: 'eip155:8453',
         x402UsdcAssetAddress: '0x2222222222222222222222222222222222222222',
         x402RatePerGbMonthUsd: 0.10,
         x402MinPriceUsd: 0.001,
+        x402MaxPriceUsd: 50.0,
         x402DefaultDurationMonths: 1,
-        x402MaxDurationMonths: 24
+        x402MaxDurationMonths: 24,
+        mppMethod: 'tempo',
+        mppChainId: 4217,
+        mppAsset: '0x20C000000000000000000000b9537d11c60E8b50',
+        mppAssetSymbol: 'USDC.e'
       }
     });
 
@@ -998,10 +1009,14 @@ describe('API integration', () => {
     expect(response.status).toBe(200);
 
     const card = (await response.json()) as {
+      payments: {
+        protocols: Array<{ protocol: string; chainId?: number; chain?: string }>;
+      };
       pricing: {
         pinning: {
           ratePerGbMonthUsd: number;
           minPriceUsd: number;
+          maxPriceUsd: number;
           defaultDurationMonths: number;
           maxDurationMonths: number;
           durationHeader: string;
@@ -1011,9 +1026,16 @@ describe('API integration', () => {
 
     expect(card.pricing.pinning.ratePerGbMonthUsd).toBe(0.10);
     expect(card.pricing.pinning.minPriceUsd).toBe(0.001);
+    expect(card.pricing.pinning.maxPriceUsd).toBe(50.0);
     expect(card.pricing.pinning.defaultDurationMonths).toBe(1);
     expect(card.pricing.pinning.maxDurationMonths).toBe(24);
     expect(card.pricing.pinning.durationHeader).toBe('X-Pin-Duration-Months');
+    expect(card.payments.protocols.map((protocol) => protocol.protocol)).toEqual(['x402', 'mpp']);
+    expect(card.payments.protocols[0]).toMatchObject({
+      protocol: 'x402',
+      chainId: 8453,
+    });
+    expect(card.payments.protocols[0]?.chain).toBeUndefined();
   });
 
   it('enforces wallet ownership when listing and deleting pins', async () => {
@@ -1063,5 +1085,246 @@ describe('API integration', () => {
       })
     );
     expect(getAsOwner.status).toBe(200);
+  });
+
+  describe('dual-protocol (x402 + MPP)', () => {
+    const MPP_VERIFIED_WALLET = '0xdddddddddddddddddddddddddddddddddddddddd';
+
+    function createStubMppxHandler(): MppxChargeHandler & { chargeCalls: Array<{ amount: string; recipient?: string }> } {
+      const chargeCalls: Array<{ amount: string; recipient?: string }> = [];
+      return {
+        chargeCalls,
+        charge: (options) => {
+          chargeCalls.push(options);
+          return (req: Request) => {
+            const authHeader = req.headers.get('Authorization');
+            const hasCredential = authHeader != null && /^payment\s+/i.test(authHeader);
+
+            if (!hasCredential) {
+              return Promise.resolve({
+                status: 402 as const,
+                challenge: new Response(
+                  JSON.stringify({ error: 'Payment required', method: 'tempo' }),
+                  {
+                    status: 402,
+                    headers: {
+                      'Content-Type': 'application/problem+json',
+                      'WWW-Authenticate': `Payment id="stub", realm="tack", method="tempo", intent="charge", amount="${options.amount}"`
+                    }
+                  }
+                )
+              });
+            }
+
+            return Promise.resolve({
+              status: 200 as const,
+              withReceipt: (response: Response) => {
+                const headers = new Headers(response.headers);
+                headers.set('Payment-Receipt', `receipt-${options.amount}`);
+                return new Response(response.body, { status: response.status, headers });
+              }
+            });
+          };
+        }
+      };
+    }
+
+    function buildDualApp(
+      stub: MppxChargeHandler,
+      overrides?: { resolveVerifiedPayer?: ResolveVerifiedPayer }
+    ): ReturnType<typeof createApp> {
+      const requirementFn = (c: { req: { path: string; method: string } }) => {
+        if (c.req.path === '/pins' && c.req.method === 'POST') {
+          return { amount: '0.001', recipient: paymentConfig.payTo };
+        }
+        if (c.req.path === '/upload' && c.req.method === 'POST') {
+          return { amount: '0.001', recipient: paymentConfig.payTo };
+        }
+        return null;
+      };
+
+      const mppMiddleware = createMppPaymentMiddleware({
+        mppx: stub,
+        requirementFn: requirementFn as Parameters<typeof createMppPaymentMiddleware>[0]['requirementFn'],
+        resolveVerifiedPayer:
+          overrides?.resolveVerifiedPayer ?? (() => Promise.resolve(MPP_VERIFIED_WALLET))
+      });
+      const mppChallengeEnhancer = createMppChallengeEnhancer({
+        mppx: stub,
+        requirementFn: requirementFn as Parameters<typeof createMppChallengeEnhancer>[0]['requirementFn'],
+        assetDecimals: 6
+      });
+
+      return buildApp({ mppMiddleware, mppChallengeEnhancer });
+    }
+
+    it('emits a dual-challenge 402 response when the client sends no credential', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub);
+
+      const res = await dualApp.request(
+        new Request('http://localhost/pins', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cid: 'bafy-dual' })
+        })
+      );
+
+      expect(res.status).toBe(402);
+
+      const paymentRequired = res.headers.get('payment-required');
+      expect(paymentRequired).toBeTruthy();
+      const decoded = decodePaymentRequiredHeader(paymentRequired!);
+      expect(decoded.accepts[0].scheme).toBe('exact');
+      expect(decoded.accepts[0].network).toBe(paymentConfig.network);
+
+      const wwwAuth = res.headers.get('www-authenticate');
+      expect(wwwAuth).toContain('Payment');
+      expect(wwwAuth).toContain('method="tempo"');
+      expect(wwwAuth).toContain('intent="charge"');
+    });
+
+    it('routes MPP credentials through the MPP middleware and short-circuits x402', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub);
+
+      const res = await dualApp.request(
+        new Request('http://localhost/pins', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'authorization': 'Payment stub-credential'
+          },
+          body: JSON.stringify({ cid: 'bafy-mpp-paid' })
+        })
+      );
+
+      expect(res.status).toBe(202);
+      expect(res.headers.get('Payment-Receipt')).toBe('receipt-0.001');
+      expect(res.headers.get(WALLET_AUTH_TOKEN_RESPONSE_HEADER)).toBeTruthy();
+
+      const body = await res.json() as { pin: { cid: string }; requestid: string };
+      expect(body.pin.cid).toBe('bafy-mpp-paid');
+      expect(stub.chargeCalls).toHaveLength(1);
+      expect(stub.chargeCalls[0].amount).toBe('0.001');
+
+      // The JWT issued for an MPP-paid request should resolve back to the
+      // MPP wallet so that downstream owner endpoints work transparently.
+      const ownerToken = extractIssuedOwnerToken(res);
+      const listRes = await dualApp.request(
+        new Request('http://localhost/pins?limit=10&offset=0', {
+          headers: ownerAuthHeaders(ownerToken)
+        })
+      );
+      expect(listRes.status).toBe(200);
+      const listed = (await listRes.json()) as {
+        count: number;
+        results: Array<{ pin: { cid: string } }>;
+      };
+      expect(listed.count).toBe(1);
+      expect(listed.results[0].pin.cid).toBe('bafy-mpp-paid');
+    });
+
+    it('ignores a forged credential.source and assigns ownership to the verified payer', async () => {
+      // A paying attacker sets `source` in the credential JSON to a victim
+      // DID. mppx verifies the payment, the server calls its on-chain
+      // resolver — which returns the TRUE payer (the attacker's wallet),
+      // not the forged victim. Pins are created under the attacker, and
+      // the victim's pins remain inaccessible to the forged JWT.
+      const attackerWallet = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const victimWallet = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+      // Seed a pre-existing pin owned by the victim via the x402 flow.
+      const victimCreate = await paidRequest(app, 'http://localhost/pins', victimWallet, () => ({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cid: 'bafy-victim-owned' })
+      }));
+      expect(victimCreate.status).toBe(202);
+      const victimPin = (await victimCreate.json()) as { requestid: string };
+
+      // Now run the MPP flow with a forged `source` DID pointing at the
+      // victim. The resolver correctly returns the attacker wallet.
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub, {
+        resolveVerifiedPayer: () => Promise.resolve(attackerWallet)
+      });
+
+      const forgedCredentialJson = Buffer.from(
+        JSON.stringify({
+          challenge: {},
+          payload: { type: 'hash', hash: '0xdeadbeef' },
+          source: `did:pkh:eip155:4217:${victimWallet}`
+        })
+      ).toString('base64url');
+
+      const res = await dualApp.request(
+        new Request('http://localhost/pins', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'authorization': `Payment ${forgedCredentialJson}`
+          },
+          body: JSON.stringify({ cid: 'bafy-forged-source' })
+        })
+      );
+
+      expect(res.status).toBe(202);
+      const attackerToken = extractIssuedOwnerToken(res);
+
+      // The new pin must be owned by the attacker, not the victim.
+      const attackerList = await dualApp.request(
+        new Request('http://localhost/pins?limit=10&offset=0', {
+          headers: ownerAuthHeaders(attackerToken)
+        })
+      );
+      const attackerPins = (await attackerList.json()) as {
+        count: number;
+        results: Array<{ pin: { cid: string } }>;
+      };
+      expect(attackerPins.results.map((r) => r.pin.cid)).toEqual(['bafy-forged-source']);
+
+      // Crucially, the attacker JWT must NOT grant access to victim pins.
+      const reachVictimGet = await dualApp.request(
+        new Request(`http://localhost/pins/${victimPin.requestid}`, {
+          headers: ownerAuthHeaders(attackerToken)
+        })
+      );
+      expect(reachVictimGet.status).toBe(404);
+
+      const reachVictimDelete = await dualApp.request(
+        new Request(`http://localhost/pins/${victimPin.requestid}`, {
+          method: 'DELETE',
+          headers: ownerAuthHeaders(attackerToken)
+        })
+      );
+      expect(reachVictimDelete.status).toBe(404);
+    });
+
+    it('returns 500 problem+json when the on-chain payer lookup fails after a successful charge', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub, {
+        resolveVerifiedPayer: () => Promise.reject(new Error('rpc unreachable'))
+      });
+
+      const res = await dualApp.request(
+        new Request('http://localhost/pins', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'authorization': 'Payment stub-credential'
+          },
+          body: JSON.stringify({ cid: 'bafy-unresolvable' })
+        })
+      );
+
+      expect(res.status).toBe(500);
+      expect(res.headers.get('Content-Type')).toBe('application/problem+json');
+      expect(stub.chargeCalls).toHaveLength(1);
+
+      const body = await res.json() as { type: string; title: string; status: number };
+      expect(body.type).toBe('https://mpp.dev/errors/payer-resolution-failed');
+      expect(body.status).toBe(500);
+    });
   });
 });

@@ -263,6 +263,20 @@ function parseRangeHeader(raw: string | null, totalSize: number): ByteRange | nu
   return { start, end: Math.min(parsedEnd, totalSize - 1) };
 }
 
+function parseEip155ChainId(network: string | undefined): number | undefined {
+  if (!network) {
+    return undefined;
+  }
+
+  const match = /^eip155:(\d+)$/.exec(network.trim());
+  if (!match) {
+    return undefined;
+  }
+
+  const chainId = Number(match[1]);
+  return Number.isInteger(chainId) ? chainId : undefined;
+}
+
 function parseDeclaredRequestSize(headers: Headers): number | null {
   const rawCustom = headers.get('x-content-size-bytes');
   const rawContentLength = headers.get('content-length');
@@ -345,13 +359,20 @@ export interface AgentCardConfig {
   x402UsdcAssetAddress: string;
   x402RatePerGbMonthUsd: number;
   x402MinPriceUsd: number;
+  x402MaxPriceUsd: number;
   x402DefaultDurationMonths: number;
   x402MaxDurationMonths: number;
+  mppMethod?: string;
+  mppChainId?: number;
+  mppAsset?: string;
+  mppAssetSymbol?: string;
 }
 
 export interface AppServices {
   pinningService: PinningService;
   paymentMiddleware: MiddlewareHandler;
+  mppMiddleware?: MiddlewareHandler;
+  mppChallengeEnhancer?: MiddlewareHandler;
   walletAuth: WalletAuthConfig;
   gatewayCacheControlMaxAgeSeconds?: number;
   uploadMaxSizeBytes?: number;
@@ -377,6 +398,7 @@ interface AppEnv {
     requestId: string;
     walletAddress: string | null;
     walletAuthError: string | null;
+    paymentResult?: import('./services/payment/types.js').PaymentResult;
   };
 }
 
@@ -446,6 +468,22 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     }
   });
 
+  // MPP middleware runs first on payment-gated routes
+  // MPP middleware only on routes that require payment (not /pins/* which are owner endpoints)
+  if (services.mppMiddleware) {
+    app.use('/pins', services.mppMiddleware);
+    app.use('/upload', services.mppMiddleware);
+    app.use('/ipfs/*', services.mppMiddleware);
+  }
+
+  // MPP challenge enhancer wraps x402 middleware — must be registered BEFORE x402
+  // so that when it calls next(), x402 runs, and the enhancer can modify the 402 response
+  if (services.mppChallengeEnhancer) {
+    app.use('/pins', services.mppChallengeEnhancer);
+    app.use('/upload', services.mppChallengeEnhancer);
+    app.use('/ipfs/*', services.mppChallengeEnhancer);
+  }
+
   app.use(services.paymentMiddleware);
 
   app.get('/health', async (c) => {
@@ -474,6 +512,33 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   app.get('/.well-known/agent.json', (c) => {
     const origin = new URL(c.req.url).origin;
     const agent = services.agentCard;
+    const x402ChainId = parseEip155ChainId(agent?.x402Network);
+
+    const x402Protocol: Record<string, unknown> = {
+      protocol: 'x402',
+      asset: agent?.x402UsdcAssetAddress,
+      network: agent?.x402Network,
+    };
+    if (x402ChainId !== undefined) {
+      x402Protocol.chainId = x402ChainId;
+    }
+    if (x402ChainId === 167000) {
+      x402Protocol.chain = 'taiko';
+    }
+
+    const protocols: Array<Record<string, unknown>> = [x402Protocol];
+
+    if (agent?.mppMethod) {
+      protocols.push({
+        protocol: 'mpp',
+        method: agent.mppMethod,
+        chain: 'tempo',
+        chainId: agent.mppChainId,
+        asset: agent.mppAsset,
+        assetSymbol: agent.mppAssetSymbol,
+        intent: 'charge',
+      });
+    }
 
     return c.json({
       protocol: 'a2a',
@@ -491,6 +556,18 @@ export function createApp(services: AppServices): Hono<AppEnv> {
           supports: ['etag', 'range', 'cache-control', 'optional-paywall']
         }
       },
+      payments: {
+        protocols,
+        pricing: {
+          ratePerGbMonthUsd: agent?.x402RatePerGbMonthUsd,
+          minPriceUsd: agent?.x402MinPriceUsd,
+          maxPriceUsd: agent?.x402MaxPriceUsd,
+          defaultDurationMonths: agent?.x402DefaultDurationMonths,
+          maxDurationMonths: agent?.x402MaxDurationMonths,
+          durationHeader: 'X-Pin-Duration-Months',
+          currency: 'USD',
+        },
+      },
       pricing: {
         pinning: {
           protocol: 'x402',
@@ -501,6 +578,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
           asset: agent?.x402UsdcAssetAddress,
           ratePerGbMonthUsd: agent?.x402RatePerGbMonthUsd,
           minPriceUsd: agent?.x402MinPriceUsd,
+          maxPriceUsd: agent?.x402MaxPriceUsd,
           defaultDurationMonths: agent?.x402DefaultDurationMonths,
           maxDurationMonths: agent?.x402MaxDurationMonths,
           durationHeader: 'X-Pin-Duration-Months'
@@ -528,7 +606,8 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
   app.post('/pins', async (c) => {
     const body = parsePinPayload(await parseJsonBody(c));
-    const paidWallet = requirePaidWallet(c.req.raw.headers);
+    const paymentResult = c.get('paymentResult');
+    const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
     issueWalletAuthToken(c, paidWallet, services.walletAuth);
 
     const durationMonths = parseDurationMonths(
@@ -591,7 +670,8 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   });
 
   app.post('/upload', async (c) => {
-    const paidWallet = requirePaidWallet(c.req.raw.headers);
+    const paymentResult = c.get('paymentResult');
+    const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
     const declaredRequestSize = parseDeclaredRequestSize(c.req.raw.headers);
     if (declaredRequestSize !== null && declaredRequestSize > uploadMaxSizeBytes + MULTIPART_REQUEST_SIZE_OVERHEAD_BYTES) {
       throw new PayloadTooLargeError(`Upload exceeds ${uploadMaxSizeBytes} bytes`);

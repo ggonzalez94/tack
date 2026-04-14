@@ -2,7 +2,7 @@
 
 **Pin to IPFS. Pay with your wallet. No account needed.**
 
-Tack is an IPFS pinning and retrieval service where payment *is* the authentication. No API keys, no signup, no monthly plans. Send a request with a wallet, pay per-use via [x402](https://www.x402.org/), and your content is pinned for as long as you paid for.
+Tack is an IPFS pinning and retrieval service where payment *is* the authentication. No API keys, no signup, no monthly plans. Send a request with a wallet, pay per-use via [x402](https://www.x402.org/) on Taiko or MPP on Tempo, and your content is pinned for as long as you paid for.
 
 Built for AI agents, developer tooling, and any machine that needs to store data on IPFS without a human creating an account first.
 
@@ -43,8 +43,8 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/pins` | x402 payment | Pin a CID |
-| `POST` | `/upload` | x402 payment | Upload a file and pin it |
+| `POST` | `/pins` | x402 or MPP payment | Pin a CID |
+| `POST` | `/upload` | x402 or MPP payment | Upload a file and pin it |
 | `GET` | `/pins` | Wallet identity | List your pins |
 | `GET` | `/pins/:requestid` | Wallet identity | Get pin status |
 | `POST` | `/pins/:requestid` | Wallet identity | Replace a pin |
@@ -53,9 +53,9 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 | `GET` | `/health` | None | Service health check |
 | `GET` | `/.well-known/agent.json` | None | A2A agent discovery |
 
-**Pricing**: Linear by size and duration — `max($0.001, fileSizeGB × $0.10 × durationMonths)`. Settled in USDC on Taiko Alethia via x402. Set `X-Pin-Duration-Months` header (1–24, default 1) to control how long content stays pinned. Expired pins are automatically cleaned up.
+**Pricing**: Linear by size and duration — `max($0.001, fileSizeGB × $0.10 × durationMonths)`. Settled in USDC on Taiko Alethia via x402 or in USDC.e on Tempo via MPP. Set `X-Pin-Duration-Months` header (1–24, default 1) to control how long content stays pinned. Expired pins are automatically cleaned up.
 
-**Auth model**: Paid endpoints use `payment-signature` (x402). Successful paid responses return a short-lived `x-wallet-auth-token` response header. Owner endpoints (list, get, replace, delete) require that bearer token. The wallet that pays owns the pin.
+**Auth model**: Paid endpoints accept either `payment-signature` (x402) or `Authorization: Payment ...` (MPP). Successful paid responses return a short-lived `x-wallet-auth-token` response header. Owner endpoints (list, get, replace, delete) require that bearer token. The wallet that pays owns the pin.
 
 **Gateway safety**: Tack serves browser-active content types with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff` so HTML/SVG/JS payloads are not executed inline from the API origin.
 
@@ -101,7 +101,7 @@ pnpm build        # Compile TypeScript
 pnpm smoke:x402   # End-to-end x402 payment smoke test
 ```
 
-See `.env.example` for all configuration options. Deployment docs live in `docs/`.
+See `.env.example` for all configuration options.
 
 ## License
 

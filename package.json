@@ -1,6 +1,6 @@
 {
   "name": "tack",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Pin to IPFS, pay with your wallet. No account needed.",
   "scripts": {
@@ -22,7 +22,9 @@
     "@x402/hono": "^2.6.0",
     "better-sqlite3": "^11.8.1",
     "hono": "^4.7.4",
-    "pino": "^9.6.0"
+    "mppx": "^0.4.7",
+    "pino": "^9.6.0",
+    "viem": "^2.39.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
@@ -32,7 +34,6 @@
     "eslint": "^9.22.0",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
-    "viem": "^2.39.3",
     "vitest": "^3.0.8"
   },
   "engines": {

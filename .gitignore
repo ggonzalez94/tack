@@ -32,3 +32,4 @@ backups/
 
 # Logs
 *.log
+.claude/
