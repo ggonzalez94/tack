@@ -32,6 +32,9 @@ importers:
       pino:
         specifier: ^9.6.0
         version: 9.14.0
+      viem:
+        specifier: ^2.39.3
+        version: 2.47.1(typescript@5.9.3)(zod@4.3.6)
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.12
@@ -54,9 +57,6 @@ importers:
       typescript:
         specifier: ^5.8.2
         version: 5.9.3
-      viem:
-        specifier: ^2.39.3
-        version: 2.47.1(typescript@5.9.3)(zod@4.3.6)
       vitest:
         specifier: ^3.0.8
         version: 3.2.4(@types/node@22.19.15)(tsx@4.21.0)(yaml@2.8.2)
