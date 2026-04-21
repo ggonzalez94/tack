@@ -4,6 +4,9 @@ node_modules
 # Build output
 dist
 
+# Vercel
+.vercel
+
 # Test coverage
 coverage
 
@@ -33,3 +36,4 @@ backups/
 # Logs
 *.log
 .claude/
+.gstack/

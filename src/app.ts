@@ -417,8 +417,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   }));
 
   app.get('/', (c) => {
-    const origin = new URL(c.req.url).origin;
-    return c.html(landingPageHtml(origin));
+    return c.html(landingPageHtml());
   });
 
   app.use('*', async (c, next) => {
