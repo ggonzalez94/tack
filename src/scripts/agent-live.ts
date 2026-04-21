@@ -209,16 +209,17 @@ function resolveEffectiveApiBaseUrl(agentCardUrl: string, agentCard: AgentCard):
 
   const advertisedUrl = new URL(advertisedEndpoint);
   if (discoveryUrl.protocol === 'https:' && advertisedUrl.protocol === 'http:' && discoveryUrl.host === advertisedUrl.host) {
+    const upgradedPath = advertisedUrl.pathname.replace(/\/$/, '');
     return {
       advertisedEndpoint,
-      effectiveApiBaseUrl: discoveryUrl.origin,
+      effectiveApiBaseUrl: discoveryUrl.origin + upgradedPath,
       endpointAdjusted: true
     };
   }
 
   return {
     advertisedEndpoint,
-    effectiveApiBaseUrl: advertisedUrl.origin,
+    effectiveApiBaseUrl: advertisedEndpoint,
     endpointAdjusted: false
   };
 }
