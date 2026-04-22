@@ -97,7 +97,6 @@ const mockFacilitator: FacilitatorClient = {
     signers: Record<string, string[]>;
   }> {
     const baseNetwork = 'eip155:8453';
-    const basePayTo = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
     return Promise.resolve({
       kinds: [
         { x402Version: 2, scheme: 'exact', network: taikoChain.network },
@@ -106,7 +105,7 @@ const mockFacilitator: FacilitatorClient = {
       extensions: [],
       signers: {
         [taikoChain.network]: [taikoChain.payTo],
-        [baseNetwork]: [basePayTo]
+        [baseNetwork]: [taikoChain.payTo]
       }
     });
   }
