@@ -18,6 +18,7 @@ import { logger } from './services/logger';
 import { createMppChallengeEnhancer } from './services/payment/challenge-enhancer';
 import { extractIpfsCidFromPath } from './services/payment/http';
 import { createMppInstance } from './services/payment/mpp';
+import { BASE_CHAIN } from './services/payment/chains/base';
 import { createMppPaymentMiddleware } from './services/payment/middleware';
 import { createTempoPayerResolver, type FetchTempoReceipt } from './services/payment/mpp-payer';
 import {
@@ -75,6 +76,15 @@ const paymentMiddleware = createX402PaymentMiddleware({
       usdcAssetDecimals: config.x402UsdcAssetDecimals,
       usdcDomainName: config.x402UsdcDomainName,
       usdcDomainVersion: config.x402UsdcDomainVersion
+    },
+    {
+      network: BASE_CHAIN.network,
+      facilitatorUrl: BASE_CHAIN.facilitatorUrl,
+      payTo: config.x402PayTo,
+      usdcAssetAddress: BASE_CHAIN.usdcAssetAddress,
+      usdcAssetDecimals: BASE_CHAIN.usdcAssetDecimals,
+      usdcDomainName: BASE_CHAIN.usdcDomainName,
+      usdcDomainVersion: BASE_CHAIN.usdcDomainVersion
     }
   ],
   ratePerGbMonthUsd: config.x402RatePerGbMonthUsd,

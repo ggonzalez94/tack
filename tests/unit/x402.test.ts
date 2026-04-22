@@ -96,10 +96,18 @@ const mockFacilitator: FacilitatorClient = {
     extensions: string[];
     signers: Record<string, string[]>;
   }> {
+    const baseNetwork = 'eip155:8453';
+    const basePayTo = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
     return Promise.resolve({
-      kinds: [{ x402Version: 2, scheme: 'exact', network: taikoChain.network }],
+      kinds: [
+        { x402Version: 2, scheme: 'exact', network: taikoChain.network },
+        { x402Version: 2, scheme: 'exact', network: baseNetwork }
+      ],
       extensions: [],
-      signers: { [taikoChain.network]: [taikoChain.payTo] }
+      signers: {
+        [taikoChain.network]: [taikoChain.payTo],
+        [baseNetwork]: [basePayTo]
+      }
     });
   }
 };
@@ -378,5 +386,48 @@ describe('x402 middleware', () => {
       })
     );
     expect(paidPremium.status).toBe(200);
+  });
+
+  it('advertises one accepts entry per registered chain with matching asset amount', async () => {
+    const baseChain = {
+      network: 'eip155:8453' as const,
+      facilitatorUrl: 'http://localhost:9998',
+      payTo: taikoChain.payTo,
+      usdcAssetAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      usdcAssetDecimals: 6,
+      usdcDomainName: 'USD Coin',
+      usdcDomainVersion: '2'
+    };
+    const multiChainConfig: X402PaymentConfig = {
+      ...testConfig,
+      chains: [taikoChain, baseChain]
+    };
+
+    const app = new Hono();
+    app.use(createX402PaymentMiddleware(multiChainConfig, mockFacilitator));
+    app.post('/pins', (c) => c.json({ ok: true }));
+
+    const unpaid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cid: 'bafy-test' })
+      })
+    );
+
+    expect(unpaid.status).toBe(402);
+    const paymentRequiredHeader = unpaid.headers.get('payment-required');
+    expect(paymentRequiredHeader).toBeTruthy();
+    const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader!);
+
+    expect(paymentRequired.accepts).toHaveLength(2);
+    expect(paymentRequired.accepts[0].network).toBe('eip155:167000');
+    expect(paymentRequired.accepts[1].network).toBe('eip155:8453');
+    expect(paymentRequired.accepts[0].payTo).toBe(taikoChain.payTo);
+    expect(paymentRequired.accepts[1].payTo).toBe(baseChain.payTo);
+    // USDC has 6 decimals on both chains; the same USD price → same asset amount.
+    expect(paymentRequired.accepts[0].amount).toBe(paymentRequired.accepts[1].amount);
+    expect(paymentRequired.accepts[0].asset).toBe(taikoChain.usdcAssetAddress);
+    expect(paymentRequired.accepts[1].asset).toBe(baseChain.usdcAssetAddress);
   });
 });
