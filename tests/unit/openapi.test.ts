@@ -32,7 +32,7 @@ describe('buildOpenApiDocument', () => {
     expect(doc.paths).toBeDefined();
   });
 
-  it('marks paid endpoints with x-payment-info containing dynamic price and protocols', () => {
+  it('marks paid endpoints with x-payment-info containing dynamic price and x402 chain metadata', () => {
     const doc = buildOpenApiDocument({ ...baseInput, agentCard: baseAgent });
     const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>;
     const post = paths['/pins'].post;
@@ -43,7 +43,38 @@ describe('buildOpenApiDocument', () => {
     expect(payment.price.max).toBe('50.000000');
     const protocols = payment.protocols as Array<Record<string, unknown>>;
     expect(protocols).toHaveLength(1);
-    expect(protocols[0]).toEqual({ x402: {} });
+    expect(protocols[0]).toEqual({
+      x402: {
+        network: 'eip155:167000',
+        asset: '0x07d83526730c7438048D55A4fc0b850e2aaB6f0b',
+        chainId: 167000,
+        chain: 'taiko'
+      }
+    });
+  });
+
+  it('exposes a non-default x402 network without hardcoded chain assumptions', () => {
+    const doc = buildOpenApiDocument({
+      ...baseInput,
+      agentCard: {
+        ...baseAgent,
+        x402Network: 'eip155:8453',
+        x402UsdcAssetAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
+      }
+    });
+    const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>;
+    const payment = paths['/pins'].post['x-payment-info'] as Record<string, unknown>;
+    const protocols = payment.protocols as Array<Record<string, unknown>>;
+    expect(protocols[0]).toEqual({
+      x402: {
+        network: 'eip155:8453',
+        asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        chainId: 8453
+      }
+    });
+    const guidance = (doc.info as Record<string, unknown>)['x-guidance'] as string;
+    expect(guidance).toContain('eip155:8453');
+    expect(guidance).not.toContain('Taiko Alethia');
   });
 
   it('adds the mpp protocol entry only when agentCard.mppMethod is set', () => {
@@ -52,7 +83,9 @@ describe('buildOpenApiDocument', () => {
       agentCard: {
         ...baseAgent,
         mppMethod: 'tempo',
-        mppAsset: '0x20C000000000000000000000b9537d11c60E8b50'
+        mppChainId: 4217,
+        mppAsset: '0x20C000000000000000000000b9537d11c60E8b50',
+        mppAssetSymbol: 'USDC.e'
       }
     });
     const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>;
@@ -63,9 +96,56 @@ describe('buildOpenApiDocument', () => {
       mpp: {
         method: 'tempo',
         intent: 'charge',
-        currency: '0x20C000000000000000000000b9537d11c60E8b50'
+        currency: '0x20C000000000000000000000b9537d11c60E8b50',
+        asset: '0x20C000000000000000000000b9537d11c60E8b50',
+        chainId: 4217,
+        assetSymbol: 'USDC.e',
+        chain: 'tempo'
       }
     });
+  });
+
+  it('emits MPP testnet asset and symbol when configured for Tempo Moderato', () => {
+    const doc = buildOpenApiDocument({
+      ...baseInput,
+      agentCard: {
+        ...baseAgent,
+        mppMethod: 'tempo',
+        mppChainId: 4218,
+        mppAsset: '0x20c0000000000000000000000000000000000000',
+        mppAssetSymbol: 'pathUSD'
+      }
+    });
+    const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>;
+    const payment = paths['/pins'].post['x-payment-info'] as Record<string, unknown>;
+    const protocols = payment.protocols as Array<Record<string, unknown>>;
+    expect(protocols[1]).toMatchObject({
+      mpp: {
+        chainId: 4218,
+        assetSymbol: 'pathUSD',
+        currency: '0x20c0000000000000000000000000000000000000'
+      }
+    });
+    const guidance = (doc.info as Record<string, unknown>)['x-guidance'] as string;
+    expect(guidance).toContain('pathUSD');
+  });
+
+  it('represents the optional retrieval paywall on /ipfs/{cid}', () => {
+    const doc = buildOpenApiDocument({
+      ...baseInput,
+      agentCard: { ...baseAgent, mppMethod: 'tempo', mppAsset: baseAgent.x402UsdcAssetAddress }
+    });
+    const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>;
+    const get = paths['/ipfs/{cid}'].get;
+    const payment = get['x-payment-info'] as Record<string, unknown>;
+    expect(payment).toBeDefined();
+    expect(payment['x-optional']).toBe(true);
+    expect(payment['x-source']).toBe('meta.retrievalPrice');
+    const price = payment.price as Record<string, unknown>;
+    expect(price.mode).toBe('dynamic');
+    expect(price.min).toBe('0.000000');
+    const responses = get.responses as Record<string, unknown>;
+    expect(responses['402']).toBeDefined();
   });
 
   it('exposes owner endpoints behind the walletAuthToken apiKey scheme', () => {

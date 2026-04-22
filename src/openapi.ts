@@ -26,17 +26,54 @@ interface XPaymentInfo {
   protocols: Array<Record<string, unknown>>;
 }
 
-function paymentProtocols(agent: AgentCardConfig | undefined): Array<Record<string, unknown>> {
-  const protocols: Array<Record<string, unknown>> = [{ x402: {} }];
-  if (agent?.mppMethod) {
-    protocols.push({
-      mpp: {
-        method: agent.mppMethod,
-        intent: 'charge',
-        currency: agent.mppAsset
-      }
-    });
+function parseEip155ChainId(network: string | undefined): number | undefined {
+  if (!network) {
+    return undefined;
   }
+  const match = /^eip155:(\d+)$/.exec(network.trim());
+  if (!match) {
+    return undefined;
+  }
+  const chainId = Number(match[1]);
+  return Number.isInteger(chainId) ? chainId : undefined;
+}
+
+function knownChainName(chainId: number | undefined): string | undefined {
+  switch (chainId) {
+    case 167000:
+      return 'taiko';
+    case 167009:
+      return 'taiko-hekla';
+    default:
+      return undefined;
+  }
+}
+
+function paymentProtocols(agent: AgentCardConfig | undefined): Array<Record<string, unknown>> {
+  const protocols: Array<Record<string, unknown>> = [];
+
+  const x402: Record<string, unknown> = {};
+  if (agent?.x402Network) x402.network = agent.x402Network;
+  if (agent?.x402UsdcAssetAddress) x402.asset = agent.x402UsdcAssetAddress;
+  const x402ChainId = parseEip155ChainId(agent?.x402Network);
+  if (x402ChainId !== undefined) x402.chainId = x402ChainId;
+  const x402Chain = knownChainName(x402ChainId);
+  if (x402Chain) x402.chain = x402Chain;
+  protocols.push({ x402 });
+
+  if (agent?.mppMethod) {
+    const mpp: Record<string, unknown> = {
+      method: agent.mppMethod,
+      intent: 'charge'
+    };
+    if (agent.mppAsset) mpp.currency = agent.mppAsset;
+    if (agent.mppAsset) mpp.asset = agent.mppAsset;
+    if (agent.mppChainId !== undefined) mpp.chainId = agent.mppChainId;
+    if (agent.mppAssetSymbol) mpp.assetSymbol = agent.mppAssetSymbol;
+    if (agent.mppMethod === 'tempo') mpp.chain = 'tempo';
+    protocols.push({ mpp });
+  }
+
   return protocols;
 }
 
@@ -54,27 +91,36 @@ function dynamicPaymentInfo(agent: AgentCardConfig | undefined): XPaymentInfo {
   };
 }
 
+function describeProtocols(agent: AgentCardConfig | undefined): string {
+  const x402Hint = agent?.x402Network ? `x402 on ${agent.x402Network}` : 'x402';
+  if (!agent?.mppMethod) {
+    return x402Hint;
+  }
+  const mppParts: string[] = [`MPP via ${agent.mppMethod}`];
+  if (agent.mppAssetSymbol) {
+    mppParts.push(`(${agent.mppAssetSymbol})`);
+  }
+  return `${x402Hint} and ${mppParts.join(' ')}`;
+}
+
 function buildGuidance(input: BuildOpenApiInput): string {
   const agent = input.agentCard;
   const rate = agent?.x402RatePerGbMonthUsd;
   const minPrice = agent?.x402MinPriceUsd;
   const defaultMonths = agent?.x402DefaultDurationMonths;
   const maxMonths = agent?.x402MaxDurationMonths;
-  const mppEnabled = Boolean(agent?.mppMethod);
-  const protocols = mppEnabled
-    ? 'x402 (USDC on Taiko Alethia) and MPP (USDC.e on Tempo)'
-    : 'x402 (USDC on Taiko Alethia)';
+  const protocols = describeProtocols(agent);
 
   const pricingLine = rate !== undefined && minPrice !== undefined && defaultMonths !== undefined && maxMonths !== undefined
     ? `Pinning is priced at $${rate}/GB/month with a $${minPrice} minimum. Pin duration is ${defaultMonths}–${maxMonths} months (default ${defaultMonths}). Final amount: max(min, sizeGB × rate × durationMonths).`
     : 'Pinning uses dynamic pricing based on content size and duration. The exact rate, minimum, and bounds are advertised in GET /.well-known/agent.json.';
 
   return [
-    `Tack is an IPFS pinning service that accepts machine payments via ${protocols}.`,
+    `Tack is an IPFS pinning service that accepts machine payments via ${protocols}. See GET /openapi.json or GET /.well-known/agent.json for the live chain and asset details.`,
     'No accounts. The wallet that pays for a pin owns it. Paid responses include an x-wallet-auth-token bearer token; use it as Authorization: Bearer <token> on owner endpoints (GET /pins, GET/POST/DELETE /pins/:requestid).',
     pricingLine,
     `Uploads are capped at ${Math.floor(input.uploadMaxSizeBytes / (1024 * 1024))}MB. POST /pins takes a CID; POST /upload takes a multipart file.`,
-    'Retrieval via GET /ipfs/:cid is free by default. Owners may set a paywall via meta.retrievalPrice when creating the pin.',
+    'Retrieval via GET /ipfs/:cid is free by default. Owners may set a paywall via meta.retrievalPrice when creating the pin — paywalled CIDs return 402 with a runtime challenge.',
     'Conforms to the IPFS Pinning Service API (https://ipfs.github.io/pinning-services-api-spec/).'
   ].join(' ');
 }
@@ -132,6 +178,17 @@ export function buildOpenApiDocument(input: BuildOpenApiInput): Record<string, u
   const { baseUrl, agentCard, uploadMaxSizeBytes } = input;
   const guidance = buildGuidance(input);
   const paid = dynamicPaymentInfo(agentCard);
+  const retrievalPaid: XPaymentInfo & { 'x-optional': true; 'x-source': string } = {
+    price: {
+      mode: 'dynamic',
+      min: '0.000000',
+      max: (agentCard?.x402MaxPriceUsd ?? 50).toFixed(6),
+      currency: 'USD'
+    },
+    protocols: paymentProtocols(agentCard),
+    'x-optional': true,
+    'x-source': 'meta.retrievalPrice'
+  };
   const uploadMaxMb = Math.floor(uploadMaxSizeBytes / (1024 * 1024));
 
   return {
@@ -286,8 +343,11 @@ export function buildOpenApiDocument(input: BuildOpenApiInput): Record<string, u
       '/ipfs/{cid}': {
         get: {
           operationId: 'getContent',
-          summary: 'Retrieve content by CID (free; owner-set retrieval price optional)',
+          summary: 'Retrieve content by CID',
+          description:
+            'Free for most CIDs. Owners may attach a paywall via meta.retrievalPrice when creating the pin; paywalled CIDs return 402 with a runtime payment challenge. Clients should be ready to handle a 402 response on this route and retry with payment.',
           tags: ['Gateway'],
+          'x-payment-info': retrievalPaid,
           parameters: [
             { name: 'cid', in: 'path', required: true, schema: { type: 'string' } },
             { name: 'Range', in: 'header', required: false, schema: { type: 'string' } }
@@ -296,6 +356,10 @@ export function buildOpenApiDocument(input: BuildOpenApiInput): Record<string, u
             '200': { description: 'Content body' },
             '206': { description: 'Partial content (Range request)' },
             '304': { description: 'Not modified' },
+            '402': {
+              description:
+                'Payment Required — owner attached a retrieval paywall. The 402 body carries the x402/MPP challenge.'
+            },
             '404': { description: 'Content not found' },
             '416': { description: 'Range not satisfiable' }
           }
