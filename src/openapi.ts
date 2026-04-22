@@ -178,16 +178,24 @@ export function buildOpenApiDocument(input: BuildOpenApiInput): Record<string, u
   const { baseUrl, agentCard, uploadMaxSizeBytes } = input;
   const guidance = buildGuidance(input);
   const paid = dynamicPaymentInfo(agentCard);
-  const retrievalPaid: XPaymentInfo & { 'x-optional': true; 'x-source': string } = {
-    price: {
-      mode: 'dynamic',
-      min: '0.000000',
-      max: (agentCard?.x402MaxPriceUsd ?? 50).toFixed(6),
-      currency: 'USD'
-    },
+  // Retrieval is free by default; owners may attach an arbitrary paywall via
+  // `meta.retrievalPrice`. The service does not clamp retrieval prices to
+  // `x402MaxPriceUsd` (that bound applies only to pinning), so we cannot
+  // honestly advertise a service-wide dynamic max. We publish the default
+  // (fixed: $0) and rely on the runtime 402 challenge as the source of truth
+  // for the actual amount — surfaced via `x-optional` + `x-source` so
+  // discovery consumers know the real price is owner- and runtime-defined.
+  const retrievalPaid: XPaymentInfo & {
+    'x-optional': true;
+    'x-source': string;
+    'x-note': string;
+  } = {
+    price: { mode: 'fixed', amount: '0', currency: 'USD' },
     protocols: paymentProtocols(agentCard),
     'x-optional': true,
-    'x-source': 'meta.retrievalPrice'
+    'x-source': 'meta.retrievalPrice',
+    'x-note':
+      'Default: free. Pin owners may attach an arbitrary paywall via meta.retrievalPrice (not bounded by service max). Actual price is advertised in the runtime 402 challenge.'
   };
   const uploadMaxMb = Math.floor(uploadMaxSizeBytes / (1024 * 1024));
 

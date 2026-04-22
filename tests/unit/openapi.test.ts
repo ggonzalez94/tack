@@ -130,7 +130,7 @@ describe('buildOpenApiDocument', () => {
     expect(guidance).toContain('pathUSD');
   });
 
-  it('represents the optional retrieval paywall on /ipfs/{cid}', () => {
+  it('represents the optional retrieval paywall on /ipfs/{cid} without fabricating a max', () => {
     const doc = buildOpenApiDocument({
       ...baseInput,
       agentCard: { ...baseAgent, mppMethod: 'tempo', mppAsset: baseAgent.x402UsdcAssetAddress }
@@ -141,9 +141,15 @@ describe('buildOpenApiDocument', () => {
     expect(payment).toBeDefined();
     expect(payment['x-optional']).toBe(true);
     expect(payment['x-source']).toBe('meta.retrievalPrice');
+    expect(typeof payment['x-note']).toBe('string');
     const price = payment.price as Record<string, unknown>;
-    expect(price.mode).toBe('dynamic');
-    expect(price.min).toBe('0.000000');
+    expect(price.mode).toBe('fixed');
+    expect(price.amount).toBe('0');
+    expect(price.currency).toBe('USD');
+    // Retrieval is not clamped by x402MaxPriceUsd, so the spec must not
+    // advertise a numeric max that would mislead consumers.
+    expect(price).not.toHaveProperty('max');
+    expect(price).not.toHaveProperty('min');
     const responses = get.responses as Record<string, unknown>;
     expect(responses['402']).toBeDefined();
   });
