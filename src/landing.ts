@@ -21,6 +21,8 @@ export function landingPageHtml(): string {
   <meta name="twitter:title" content="Tack — Storage for agents." />
   <meta name="twitter:description" content="A place for your agent to keep things. IPFS pinning it calls directly — pay-per-pin, no API keys." />
 
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzBhMGQxNyIvPjxwYXRoIGQ9Ik0yMSA1IEgxNyBMMTEgMjcgSDE1IFoiIGZpbGw9IiNlODE4OTkiLz48L3N2Zz4K" />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..700,30..100;1,9..144,400..700,30..100&family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" />
