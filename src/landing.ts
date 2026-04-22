@@ -1676,7 +1676,7 @@ export function landingPageHtml(): string {
           <div class="price-left">
             <div class="price-eyebrow">→ Live quote</div>
             <div class="price-live" aria-live="polite">
-              <span class="currency">$</span><span id="price-out">0.29</span>
+              <span class="currency">$</span><span id="price-out">0.293</span>
             </div>
             <div class="price-sub">
               <span class="price-sub-val" id="price-summary">500 MB · 6 months</span>
