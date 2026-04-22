@@ -16,14 +16,18 @@ import {
   type X402PaymentConfig
 } from '../../src/services/x402';
 
-const testConfig: X402PaymentConfig = {
+const taikoChain = {
+  network: 'eip155:167000' as const,
   facilitatorUrl: 'http://localhost:9999',
-  network: 'eip155:167000',
   payTo: '0x1111111111111111111111111111111111111111',
   usdcAssetAddress: '0x2222222222222222222222222222222222222222',
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
-  usdcDomainVersion: '2',
+  usdcDomainVersion: '2'
+};
+
+const testConfig: X402PaymentConfig = {
+  chains: [taikoChain],
   ratePerGbMonthUsd: 0.10,
   minPriceUsd: 0.001,
   maxPriceUsd: 50.0,
@@ -93,9 +97,9 @@ const mockFacilitator: FacilitatorClient = {
     signers: Record<string, string[]>;
   }> {
     return Promise.resolve({
-      kinds: [{ x402Version: 2, scheme: 'exact', network: testConfig.network }],
+      kinds: [{ x402Version: 2, scheme: 'exact', network: taikoChain.network }],
       extensions: [],
-      signers: { [testConfig.network]: [testConfig.payTo] }
+      signers: { [taikoChain.network]: [taikoChain.payTo] }
     });
   }
 };
@@ -167,10 +171,10 @@ describe('x402 payment integration helpers', () => {
       x402Version: 2,
       accepted: {
         scheme: 'exact',
-        network: testConfig.network,
-        asset: testConfig.usdcAssetAddress,
+        network: taikoChain.network,
+        asset: taikoChain.usdcAssetAddress,
         amount: '1000',
-        payTo: testConfig.payTo,
+        payTo: taikoChain.payTo,
         maxTimeoutSeconds: 60
       },
       payload: {
@@ -268,7 +272,7 @@ describe('x402 middleware', () => {
       payload: {
         authorization: {
           from: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          to: testConfig.payTo,
+          to: taikoChain.payTo,
           value: accepted.amount,
           validAfter: '0',
           validBefore: '9999999999',
@@ -295,7 +299,7 @@ describe('x402 middleware', () => {
 
     const settlement = decodePaymentResponseHeader(paymentResponseHeader!);
     expect(settlement.success).toBe(true);
-    expect(settlement.network).toBe(testConfig.network);
+    expect(settlement.network).toBe(taikoChain.network);
   });
 
   it('uses the normalized public URL in payment requirements', async () => {

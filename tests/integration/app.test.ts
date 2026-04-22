@@ -35,14 +35,18 @@ const walletAuthConfig: WalletAuthConfig = {
   ttlSeconds: 900
 };
 
-const paymentConfig: X402PaymentConfig = {
+const taikoChain = {
+  network: 'eip155:167000' as const,
   facilitatorUrl: 'http://localhost:9999',
-  network: 'eip155:167000',
   payTo: '0x1111111111111111111111111111111111111111',
   usdcAssetAddress: '0x2222222222222222222222222222222222222222',
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
-  usdcDomainVersion: '2',
+  usdcDomainVersion: '2'
+};
+
+const paymentConfig: X402PaymentConfig = {
+  chains: [taikoChain],
   ratePerGbMonthUsd: 0.10,
   minPriceUsd: 0.001,
   maxPriceUsd: 50.0,
@@ -85,9 +89,9 @@ const mockFacilitator: FacilitatorClient = {
     signers: Record<string, string[]>;
   }> {
     return Promise.resolve({
-      kinds: [{ x402Version: 2, scheme: 'exact', network: paymentConfig.network }],
+      kinds: [{ x402Version: 2, scheme: 'exact', network: taikoChain.network }],
       extensions: [],
-      signers: { [paymentConfig.network]: [paymentConfig.payTo] }
+      signers: { [taikoChain.network]: [taikoChain.payTo] }
     });
   }
 };
@@ -1135,10 +1139,10 @@ describe('API integration', () => {
     ): ReturnType<typeof createApp> {
       const requirementFn = (c: { req: { path: string; method: string } }) => {
         if (c.req.path === '/pins' && c.req.method === 'POST') {
-          return { amount: '0.001', recipient: paymentConfig.payTo };
+          return { amount: '0.001', recipient: taikoChain.payTo };
         }
         if (c.req.path === '/upload' && c.req.method === 'POST') {
-          return { amount: '0.001', recipient: paymentConfig.payTo };
+          return { amount: '0.001', recipient: taikoChain.payTo };
         }
         return null;
       };
@@ -1176,7 +1180,7 @@ describe('API integration', () => {
       expect(paymentRequired).toBeTruthy();
       const decoded = decodePaymentRequiredHeader(paymentRequired!);
       expect(decoded.accepts[0].scheme).toBe('exact');
-      expect(decoded.accepts[0].network).toBe(paymentConfig.network);
+      expect(decoded.accepts[0].network).toBe(taikoChain.network);
 
       const wwwAuth = res.headers.get('www-authenticate');
       expect(wwwAuth).toContain('Payment');

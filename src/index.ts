@@ -66,13 +66,17 @@ const pinningService = new PinningService(repository, ipfsClient, config.delegat
   replicas: replicaClients
 });
 const paymentMiddleware = createX402PaymentMiddleware({
-  facilitatorUrl: config.x402FacilitatorUrl,
-  network: config.x402Network as `${string}:${string}`,
-  payTo: config.x402PayTo,
-  usdcAssetAddress: config.x402UsdcAssetAddress,
-  usdcAssetDecimals: config.x402UsdcAssetDecimals,
-  usdcDomainName: config.x402UsdcDomainName,
-  usdcDomainVersion: config.x402UsdcDomainVersion,
+  chains: [
+    {
+      network: config.x402Network as `${string}:${string}`,
+      facilitatorUrl: config.x402FacilitatorUrl,
+      payTo: config.x402PayTo,
+      usdcAssetAddress: config.x402UsdcAssetAddress,
+      usdcAssetDecimals: config.x402UsdcAssetDecimals,
+      usdcDomainName: config.x402UsdcDomainName,
+      usdcDomainVersion: config.x402UsdcDomainVersion
+    }
+  ],
   ratePerGbMonthUsd: config.x402RatePerGbMonthUsd,
   minPriceUsd: config.x402MinPriceUsd,
   maxPriceUsd: config.x402MaxPriceUsd,

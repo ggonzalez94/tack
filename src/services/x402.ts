@@ -44,14 +44,18 @@ export {
   WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER,
 } from './wallet-auth.js';
 
-export interface X402PaymentConfig {
-  facilitatorUrl: string;
+export interface X402ChainConfig {
   network: `${string}:${string}`;
+  facilitatorUrl: string;
   payTo: string;
   usdcAssetAddress: string;
   usdcAssetDecimals: number;
   usdcDomainName: string;
   usdcDomainVersion: string;
+}
+
+export interface X402PaymentConfig {
+  chains: X402ChainConfig[];
   ratePerGbMonthUsd: number;
   minPriceUsd: number;
   maxPriceUsd: number;
@@ -456,44 +460,54 @@ export function createX402PaymentMiddleware(
   facilitatorClient?: FacilitatorClient,
   options?: X402PaymentMiddlewareOptions
 ): MiddlewareHandler {
+  if (config.chains.length === 0) {
+    throw new Error('createX402PaymentMiddleware requires at least one chain');
+  }
+
   const retrievalResolver = options?.resolveRetrievalPayment;
-  const facilitator = facilitatorClient ?? new HTTPFacilitatorClient({ url: config.facilitatorUrl });
-  const resourceServer = new x402ResourceServer(facilitator).register(config.network, new ExactEvmScheme());
-  const exactTransferExtra = {
-    name: config.usdcDomainName,
-    version: config.usdcDomainVersion
-  };
+
+  // When a single facilitator is injected (tests), reuse it for every chain.
+  // In production each chain gets its own HTTPFacilitatorClient.
+  const facilitators = facilitatorClient
+    ? [facilitatorClient]
+    : config.chains.map((chain) => new HTTPFacilitatorClient({ url: chain.facilitatorUrl }));
+
+  const resourceServer = new x402ResourceServer(facilitators);
+  for (const chain of config.chains) {
+    resourceServer.register(chain.network, new ExactEvmScheme());
+  }
+
   const routes: RoutesConfig = {
     'POST /pins': {
-      accepts: {
-        scheme: 'exact',
-        network: config.network,
-        payTo: config.payTo,
-        extra: exactTransferExtra,
+      accepts: config.chains.map((chain) => ({
+        scheme: 'exact' as const,
+        network: chain.network,
+        payTo: chain.payTo,
+        extra: { name: chain.usdcDomainName, version: chain.usdcDomainVersion },
         price: async (context: HTTPRequestContext) => {
           const sizeBytes = await resolvePinRequestSizeBytes(context);
           const durationMonths = resolveDurationMonths(context, config);
           const usdPrice = calculatePriceUsd(sizeBytes, durationMonths, config);
-          return usdToAssetAmount(usdPrice, config.usdcAssetAddress, config.usdcAssetDecimals);
+          return usdToAssetAmount(usdPrice, chain.usdcAssetAddress, chain.usdcAssetDecimals);
         }
-      },
+      })),
       description: 'Create IPFS pin',
       mimeType: 'application/json',
       unpaidResponseBody: makeUnpaidResponseBody('Pin a CID to IPFS.', config),
       settlementFailedResponseBody: makeSettlementFailedResponseBody()
     },
     'POST /upload': {
-      accepts: {
-        scheme: 'exact',
-        network: config.network,
-        payTo: config.payTo,
-        extra: exactTransferExtra,
+      accepts: config.chains.map((chain) => ({
+        scheme: 'exact' as const,
+        network: chain.network,
+        payTo: chain.payTo,
+        extra: { name: chain.usdcDomainName, version: chain.usdcDomainVersion },
         price: (context: HTTPRequestContext) => {
           const sizeBytes = resolveUploadSizeBytes(context);
           const usdPrice = calculatePriceUsd(sizeBytes, 1, config);
-          return usdToAssetAmount(usdPrice, config.usdcAssetAddress, config.usdcAssetDecimals);
+          return usdToAssetAmount(usdPrice, chain.usdcAssetAddress, chain.usdcAssetDecimals);
         }
-      },
+      })),
       description: 'Upload content to IPFS',
       mimeType: 'application/json',
       unpaidResponseBody: makeUnpaidResponseBody('Upload content to IPFS and pin it.'),
@@ -503,20 +517,20 @@ export function createX402PaymentMiddleware(
 
   if (retrievalResolver) {
     routes['GET /ipfs/[cid]'] = {
-      accepts: {
-        scheme: 'exact',
-        network: config.network,
-        extra: exactTransferExtra,
+      accepts: config.chains.map((chain) => ({
+        scheme: 'exact' as const,
+        network: chain.network,
+        extra: { name: chain.usdcDomainName, version: chain.usdcDomainVersion },
         payTo: async (context: HTTPRequestContext) => {
           const requirement = await resolveRetrievalRequirement(context, retrievalResolver);
-          return requirement?.payTo ?? config.payTo;
+          return requirement?.payTo ?? chain.payTo;
         },
         price: async (context: HTTPRequestContext) => {
           const requirement = await resolveRetrievalRequirement(context, retrievalResolver);
           const usdPrice = requirement?.priceUsd ?? config.minPriceUsd;
-          return usdToAssetAmount(usdPrice, config.usdcAssetAddress, config.usdcAssetDecimals);
+          return usdToAssetAmount(usdPrice, chain.usdcAssetAddress, chain.usdcAssetDecimals);
         }
-      },
+      })),
       description: 'Retrieve IPFS content',
       mimeType: 'application/octet-stream',
       unpaidResponseBody: () => ({
