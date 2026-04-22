@@ -13,6 +13,9 @@ Format:
 - Tack now accepts x402 payments on Base mainnet (`eip155:8453`) alongside Taiko Alethia. The same endpoints (`POST /pins`, `POST /upload`, paywalled `GET /ipfs/:cid`) serve both chains — unpaid requests receive a single `402` whose `payment-required` header advertises Taiko USDC and Base USDC at the same USD price. Clients pick whichever chain they already hold USDC on. Base settlement goes through the permissionless PayAI facilitator; no operator-side credentials required.
 - The agent card at `/.well-known/agent.json` now publishes one x402 protocol entry per supported chain (`chain: 'taiko'` and `chain: 'base'`).
 
+### Changed
+- **Breaking (ops):** Settlement wallet is now configured per chain. `X402_PAY_TO` is replaced by three required env vars: `X402_TAIKO_PAY_TO`, `X402_BASE_PAY_TO`, and `MPP_PAY_TO` (the last required only when MPP is enabled). Reusing a single address across chains is unsafe when that address is a Safe or other contract wallet — CREATE2 addresses are deterministic but the contract must actually be deployed on each chain before funds sent to that address can be controlled. Operators must set each variable to an address they control on the target chain.
+
 ## [v0.2.0] - 2026-04-14
 
 ### Added

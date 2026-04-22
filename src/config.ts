@@ -20,7 +20,8 @@ export interface AppConfig {
   rateLimitRequestsPerMinute: number;
   x402FacilitatorUrl: string;
   x402Network: string;
-  x402PayTo: string;
+  x402TaikoPayTo: string;
+  x402BasePayTo: string;
   x402UsdcAssetAddress: string;
   x402UsdcAssetDecimals: number;
   x402UsdcDomainName: string;
@@ -31,6 +32,7 @@ export interface AppConfig {
   x402DefaultDurationMonths: number;
   x402MaxDurationMonths: number;
   mppSecretKey?: string;
+  mppPayTo: string;
   mppTestnet: boolean;
   mppTempoRpcUrl?: string;
 }
@@ -146,16 +148,25 @@ function validateProductionConfig(config: AppConfig): void {
     throw new Error('Invalid production configuration: WALLET_AUTH_TOKEN_SECRET must be a strong random secret');
   }
 
-  if (isPlaceholderEvmAddress(config.x402PayTo)) {
-    throw new Error('Invalid production configuration: X402_PAY_TO must be a real wallet address');
+  if (isPlaceholderEvmAddress(config.x402TaikoPayTo)) {
+    throw new Error('Invalid production configuration: X402_TAIKO_PAY_TO must be a real wallet address');
+  }
+
+  if (isPlaceholderEvmAddress(config.x402BasePayTo)) {
+    throw new Error('Invalid production configuration: X402_BASE_PAY_TO must be a real wallet address');
   }
 
   if (isPlaceholderEvmAddress(config.x402UsdcAssetAddress)) {
     throw new Error('Invalid production configuration: X402_USDC_ASSET_ADDRESS must be a real token address');
   }
 
-  if (config.mppSecretKey && config.mppSecretKey.length < 32) {
-    throw new Error('Invalid production configuration: MPP_SECRET_KEY must be at least 32 bytes');
+  if (config.mppSecretKey) {
+    if (config.mppSecretKey.length < 32) {
+      throw new Error('Invalid production configuration: MPP_SECRET_KEY must be at least 32 bytes');
+    }
+    if (isPlaceholderEvmAddress(config.mppPayTo)) {
+      throw new Error('Invalid production configuration: MPP_PAY_TO must be a real wallet address when MPP is enabled');
+    }
   }
 }
 
@@ -202,7 +213,8 @@ export function getConfig(): AppConfig {
     ),
     x402FacilitatorUrl: process.env.X402_FACILITATOR_URL ?? 'https://facilitator.taiko.xyz',
     x402Network: process.env.X402_NETWORK ?? 'eip155:167000',
-    x402PayTo: process.env.X402_PAY_TO ?? '0x0000000000000000000000000000000000000001',
+    x402TaikoPayTo: process.env.X402_TAIKO_PAY_TO ?? '0x0000000000000000000000000000000000000001',
+    x402BasePayTo: process.env.X402_BASE_PAY_TO ?? '0x0000000000000000000000000000000000000001',
     x402UsdcAssetAddress: process.env.X402_USDC_ASSET_ADDRESS ?? '0x0000000000000000000000000000000000000001',
     x402UsdcAssetDecimals: parseNumber(process.env.X402_USDC_ASSET_DECIMALS, 6, 'X402_USDC_ASSET_DECIMALS'),
     x402UsdcDomainName: process.env.X402_USDC_DOMAIN_NAME ?? 'USD Coin',
@@ -213,6 +225,7 @@ export function getConfig(): AppConfig {
     x402DefaultDurationMonths: parsePositiveInteger(process.env.X402_DEFAULT_DURATION_MONTHS, 1, 'X402_DEFAULT_DURATION_MONTHS'),
     x402MaxDurationMonths: parsePositiveInteger(process.env.X402_MAX_DURATION_MONTHS, 24, 'X402_MAX_DURATION_MONTHS'),
     mppSecretKey,
+    mppPayTo: process.env.MPP_PAY_TO ?? '0x0000000000000000000000000000000000000001',
     mppTestnet: parseBoolean(process.env.MPP_TESTNET, false),
     mppTempoRpcUrl
   };

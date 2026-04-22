@@ -71,7 +71,7 @@ const paymentMiddleware = createX402PaymentMiddleware({
     {
       network: config.x402Network as `${string}:${string}`,
       facilitatorUrl: config.x402FacilitatorUrl,
-      payTo: config.x402PayTo,
+      payTo: config.x402TaikoPayTo,
       usdcAssetAddress: config.x402UsdcAssetAddress,
       usdcAssetDecimals: config.x402UsdcAssetDecimals,
       usdcDomainName: config.x402UsdcDomainName,
@@ -80,7 +80,7 @@ const paymentMiddleware = createX402PaymentMiddleware({
     {
       network: BASE_CHAIN.network,
       facilitatorUrl: BASE_CHAIN.facilitatorUrl,
-      payTo: config.x402PayTo,
+      payTo: config.x402BasePayTo,
       usdcAssetAddress: BASE_CHAIN.usdcAssetAddress,
       usdcAssetDecimals: BASE_CHAIN.usdcAssetDecimals,
       usdcDomainName: BASE_CHAIN.usdcDomainName,
@@ -116,7 +116,7 @@ const tempoViemChain = mppTestnet ? tempoModerato : tempo;
 const tempoRpcUrl = config.mppTempoRpcUrl ?? tempoViemChain.rpcUrls.default.http[0];
 const mppx = config.mppSecretKey
   ? createMppInstance({
-      payTo: config.x402PayTo,
+      payTo: config.mppPayTo,
       secretKey: config.mppSecretKey,
       realm: config.publicBaseUrl,
       testnet: mppTestnet,
@@ -210,7 +210,7 @@ async function resolveMppRequirement(c: Context): Promise<{ amount: string; reci
 
     return {
       amount: formatUsdAmount(await resolvePinPriceUsd(c)),
-      recipient: config.x402PayTo,
+      recipient: config.mppPayTo,
     };
   }
 
@@ -221,7 +221,7 @@ async function resolveMppRequirement(c: Context): Promise<{ amount: string; reci
 
     return {
       amount: formatUsdAmount(resolveUploadPriceUsd(c)),
-      recipient: config.x402PayTo,
+      recipient: config.mppPayTo,
     };
   }
 
