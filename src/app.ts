@@ -485,6 +485,86 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
   app.use(services.paymentMiddleware);
 
+  app.get('/llms.txt', (c) => {
+    const base = publicBaseUrl ?? 'https://tack.taiko.xyz';
+    const agent = services.agentCard;
+    const rate = agent?.x402RatePerGbMonthUsd;
+    const minPrice = agent?.x402MinPriceUsd;
+    const maxPrice = agent?.x402MaxPriceUsd;
+    const defaultMonths = agent?.x402DefaultDurationMonths;
+    const maxMonths = agent?.x402MaxDurationMonths;
+    const uploadMaxMb = Math.floor(uploadMaxSizeBytes / (1024 * 1024));
+    const mppEnabled = Boolean(agent?.mppMethod);
+
+    const pricingBlock = rate !== undefined && minPrice !== undefined && maxPrice !== undefined && defaultMonths !== undefined && maxMonths !== undefined
+      ? `$${rate} / GB / month. Minimum charge $${minPrice} per pin, capped at $${maxPrice} per pin. Pin duration ${defaultMonths}–${maxMonths} months (default: ${defaultMonths} month).
+Price formula: min(max($${minPrice}, sizeGB × $${rate} × durationMonths), $${maxPrice}).`
+      : 'Dynamic pricing based on content size and duration. See GET /.well-known/agent.json for the current rate, minimum charge, maximum cap, and duration bounds.';
+
+    const protocolsBlock = mppEnabled
+      ? `- x402: \`payment-signature\` header, USDC on Taiko Alethia (EIP-3009 transferWithAuthorization)
+- MPP: \`Authorization: Payment\` header, USDC.e on Tempo (mppx SDK)
+
+Both protocols are accepted simultaneously on all paid endpoints.`
+      : `- x402: \`payment-signature\` header, USDC on Taiko Alethia (EIP-3009 transferWithAuthorization)
+
+MPP (\`Authorization: Payment\`) is disabled on this deployment. Check GET /.well-known/agent.json for the live list of supported protocols.`;
+
+    const text = `\
+# Tack
+
+> IPFS pinning and content retrieval for agents. Pay with USDC on Taiko${mppEnabled ? ' or USDC.e on Tempo' : ''} — no accounts, no API keys.
+
+## Overview
+
+Tack is an IPFS pinning service that accepts machine payments${mppEnabled ? ' via x402 and MPP' : ' via x402'}.
+Pin existing CIDs, upload files, or retrieve content through the gateway.
+Wallet identity is derived from payment — no registration required.
+
+Hosted at: ${base}
+
+## Pricing
+
+${pricingBlock}
+
+## Authentication
+
+No accounts. Paying for a pin returns an \`x-wallet-auth-token\` bearer token.
+Use it as \`Authorization: Bearer <token>\` on owner endpoints.
+
+## Payment Protocols
+
+${protocolsBlock}
+
+## Endpoints
+
+### Paid (payment required)
+
+- POST /pins — Pin content by CID. Body: { cid, name?, origins?, meta? }. Optional header: X-Pin-Duration-Months.
+- POST /upload — Upload a file (multipart/form-data, field "file", max ${uploadMaxMb}MB). Returns { cid }.
+
+### Gateway
+
+- GET /ipfs/:cid — Retrieve content by CID. Free by default; owners may set a retrieval price via meta.retrievalPrice.
+
+### Owner (bearer token required)
+
+- GET /pins — List your pins. Query: cid, name, status, before, after, limit, offset.
+- GET /pins/:requestid — Get a specific pin by request ID.
+- POST /pins/:requestid — Replace a pin. Same body as POST /pins.
+- DELETE /pins/:requestid — Delete a pin.
+
+## Pinning Service API
+
+Conforms to the IPFS Pinning Service API spec: https://ipfs.github.io/pinning-services-api-spec/
+
+## Agent Card
+
+Machine-readable A2A agent card: GET /.well-known/agent.json
+`;
+    return c.text(text, 200, { 'Cache-Control': 'public, max-age=3600' });
+  });
+
   app.get('/health', async (c) => {
     if (!services.healthCheck) {
       return c.json({ status: 'ok' });
