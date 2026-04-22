@@ -487,14 +487,36 @@ export function createApp(services: AppServices): Hono<AppEnv> {
 
   app.get('/llms.txt', (c) => {
     const base = publicBaseUrl ?? 'https://tack.taiko.xyz';
+    const agent = services.agentCard;
+    const rate = agent?.x402RatePerGbMonthUsd;
+    const minPrice = agent?.x402MinPriceUsd;
+    const defaultMonths = agent?.x402DefaultDurationMonths;
+    const maxMonths = agent?.x402MaxDurationMonths;
+    const uploadMaxMb = Math.floor(uploadMaxSizeBytes / (1024 * 1024));
+    const mppEnabled = Boolean(agent?.mppMethod);
+
+    const pricingBlock = rate !== undefined && minPrice !== undefined && defaultMonths !== undefined && maxMonths !== undefined
+      ? `$${rate} / GB / month. Minimum charge $${minPrice} per pin. Pin duration ${defaultMonths}–${maxMonths} months (default: ${defaultMonths} month).
+Price formula: max(min, sizeGB × $${rate} × durationMonths).`
+      : 'Dynamic pricing based on content size and duration. See GET /.well-known/agent.json for the current rate, minimum charge, and duration bounds.';
+
+    const protocolsBlock = mppEnabled
+      ? `- x402: \`payment-signature\` header, USDC on Taiko Alethia (EIP-3009 transferWithAuthorization)
+- MPP: \`Authorization: Payment\` header, USDC.e on Tempo (mppx SDK)
+
+Both protocols are accepted simultaneously on all paid endpoints.`
+      : `- x402: \`payment-signature\` header, USDC on Taiko Alethia (EIP-3009 transferWithAuthorization)
+
+MPP (\`Authorization: Payment\`) is disabled on this deployment. Check GET /.well-known/agent.json for the live list of supported protocols.`;
+
     const text = `\
 # Tack
 
-> IPFS pinning and content retrieval for agents. Pay with USDC on Taiko or USDC.e on Tempo — no accounts, no API keys.
+> IPFS pinning and content retrieval for agents. Pay with USDC on Taiko${mppEnabled ? ' or USDC.e on Tempo' : ''} — no accounts, no API keys.
 
 ## Overview
 
-Tack is an IPFS pinning service that accepts machine payments via x402 and MPP.
+Tack is an IPFS pinning service that accepts machine payments${mppEnabled ? ' via x402 and MPP' : ' via x402'}.
 Pin existing CIDs, upload files, or retrieve content through the gateway.
 Wallet identity is derived from payment — no registration required.
 
@@ -502,8 +524,7 @@ Hosted at: ${base}
 
 ## Pricing
 
-$0.10 / GB / month. Minimum charge $0.001 per pin. Pin duration 1–24 months (default: 1 month).
-Price formula: max(min, sizeGB × $0.10 × durationMonths).
+${pricingBlock}
 
 ## Authentication
 
@@ -512,17 +533,14 @@ Use it as \`Authorization: Bearer <token>\` on owner endpoints.
 
 ## Payment Protocols
 
-- x402: \`payment-signature\` header, USDC on Taiko Alethia (EIP-3009 transferWithAuthorization)
-- MPP: \`Authorization: Payment\` header, USDC.e on Tempo (mppx SDK)
-
-Both protocols are accepted simultaneously on all paid endpoints.
+${protocolsBlock}
 
 ## Endpoints
 
 ### Paid (payment required)
 
 - POST /pins — Pin content by CID. Body: { cid, name?, origins?, meta? }. Optional header: X-Pin-Duration-Months.
-- POST /upload — Upload a file (multipart/form-data, field "file", max 100MB). Returns { cid }.
+- POST /upload — Upload a file (multipart/form-data, field "file", max ${uploadMaxMb}MB). Returns { cid }.
 
 ### Gateway
 
