@@ -490,15 +490,16 @@ export function createApp(services: AppServices): Hono<AppEnv> {
     const agent = services.agentCard;
     const rate = agent?.x402RatePerGbMonthUsd;
     const minPrice = agent?.x402MinPriceUsd;
+    const maxPrice = agent?.x402MaxPriceUsd;
     const defaultMonths = agent?.x402DefaultDurationMonths;
     const maxMonths = agent?.x402MaxDurationMonths;
     const uploadMaxMb = Math.floor(uploadMaxSizeBytes / (1024 * 1024));
     const mppEnabled = Boolean(agent?.mppMethod);
 
-    const pricingBlock = rate !== undefined && minPrice !== undefined && defaultMonths !== undefined && maxMonths !== undefined
-      ? `$${rate} / GB / month. Minimum charge $${minPrice} per pin. Pin duration ${defaultMonths}–${maxMonths} months (default: ${defaultMonths} month).
-Price formula: max(min, sizeGB × $${rate} × durationMonths).`
-      : 'Dynamic pricing based on content size and duration. See GET /.well-known/agent.json for the current rate, minimum charge, and duration bounds.';
+    const pricingBlock = rate !== undefined && minPrice !== undefined && maxPrice !== undefined && defaultMonths !== undefined && maxMonths !== undefined
+      ? `$${rate} / GB / month. Minimum charge $${minPrice} per pin, capped at $${maxPrice} per pin. Pin duration ${defaultMonths}–${maxMonths} months (default: ${defaultMonths} month).
+Price formula: min(max($${minPrice}, sizeGB × $${rate} × durationMonths), $${maxPrice}).`
+      : 'Dynamic pricing based on content size and duration. See GET /.well-known/agent.json for the current rate, minimum charge, maximum cap, and duration bounds.';
 
     const protocolsBlock = mppEnabled
       ? `- x402: \`payment-signature\` header, USDC on Taiko Alethia (EIP-3009 transferWithAuthorization)
