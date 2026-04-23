@@ -139,6 +139,15 @@ describe('config validation', () => {
     expect(() => getConfig()).toThrow('MPP_PAY_TO must be a real wallet address when MPP is enabled');
   });
 
+  it('rejects X402_NETWORK set to Base to prevent dedupe collision', () => {
+    setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
+      X402_NETWORK: 'eip155:8453'
+    });
+
+    expect(() => getConfig()).toThrow('X402_NETWORK cannot be eip155:8453');
+  });
+
   it('parses replica URL lists', () => {
     setTestEnv({
       WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',

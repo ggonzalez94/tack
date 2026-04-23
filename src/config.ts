@@ -140,6 +140,18 @@ function validateProductionConfig(config: AppConfig): void {
     );
   }
 
+  // X402_NETWORK configures the primary (Taiko) chain. Base is appended
+  // separately from hardcoded constants. If an operator sets X402_NETWORK to
+  // Base's chain ID, the dedupe logic would collapse both entries to one
+  // that reuses Taiko-specific env vars (X402_TAIKO_PAY_TO,
+  // X402_USDC_ASSET_ADDRESS) for a Base `accepts` entry, which is wrong.
+  // Fail fast rather than serving misconfigured payment requirements.
+  if (config.x402Network === 'eip155:8453') {
+    throw new Error(
+      'Invalid configuration: X402_NETWORK cannot be eip155:8453 (Base) — Base is configured separately via X402_BASE_PAY_TO and the built-in BASE_CHAIN constants. X402_NETWORK is for the primary (Taiko) chain; leave it at the default eip155:167000 or set it to a Taiko testnet chain ID.'
+    );
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     return;
   }
