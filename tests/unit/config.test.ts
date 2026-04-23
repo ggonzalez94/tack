@@ -213,6 +213,31 @@ describe('config validation', () => {
     expect(config.x402MaxDurationMonths).toBe(24);
   });
 
+  it('parses private storage defaults', () => {
+    setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret'
+    });
+
+    const config = getConfig();
+    expect(config.privateStoragePath).toBe('./data/private-objects');
+    expect(config.privateObjectMaxSizeBytes).toBe(100 * 1024 * 1024);
+    expect(config.walletAuthAllowedNetworks).toEqual(['eip155:167000', 'eip155:8453']);
+    expect(config.walletAuthEip1271RpcUrls).toEqual({});
+  });
+
+  it('parses wallet auth EIP-1271 RPC URLs', () => {
+    setTestEnv({
+      WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',
+      WALLET_AUTH_EIP1271_RPC_URLS: 'eip155:8453=https://base.example,eip155:167000=https://taiko.example'
+    });
+
+    const config = getConfig();
+    expect(config.walletAuthEip1271RpcUrls).toEqual({
+      'eip155:8453': 'https://base.example',
+      'eip155:167000': 'https://taiko.example'
+    });
+  });
+
   it('parses custom pricing env vars', () => {
     setTestEnv({
       WALLET_AUTH_TOKEN_SECRET: 'test-wallet-auth-secret',

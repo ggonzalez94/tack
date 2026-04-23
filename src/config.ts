@@ -14,10 +14,14 @@ export interface AppConfig {
   walletAuthTokenAudience: string;
   walletAuthTokenTtlSeconds: number;
   uploadMaxSizeBytes: number;
+  privateStoragePath: string;
+  privateObjectMaxSizeBytes: number;
   gatewayMaxContentSizeBytes: number;
   gatewayCacheMaxSizeBytes: number;
   gatewayCacheControlMaxAgeSeconds: number;
   rateLimitRequestsPerMinute: number;
+  walletAuthAllowedNetworks: string[];
+  walletAuthEip1271RpcUrls: Record<string, string>;
   x402FacilitatorUrl: string;
   x402Network: string;
   x402TaikoPayTo: string;
@@ -89,6 +93,30 @@ function parseList(value: string | undefined): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+function parseKeyValueMap(value: string | undefined, fieldName: string): Record<string, string> {
+  if (!value) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+  for (const item of parseList(value)) {
+    const separator = item.indexOf('=');
+    if (separator <= 0 || separator === item.length - 1) {
+      throw new Error(`${fieldName} entries must use key=value`);
+    }
+
+    const key = item.slice(0, separator).trim();
+    const mapValue = item.slice(separator + 1).trim();
+    if (key.length === 0 || mapValue.length === 0) {
+      throw new Error(`${fieldName} entries must use key=value`);
+    }
+
+    result[key] = mapValue;
+  }
+
+  return result;
 }
 
 function parsePublicBaseUrl(value: string | undefined): string | undefined {
@@ -191,6 +219,8 @@ export function getConfig(): AppConfig {
   const mppSecretKey = process.env.MPP_SECRET_KEY?.trim() || undefined;
   const mppTempoRpcUrl = process.env.MPP_TEMPO_RPC_URL?.trim() || undefined;
 
+  const configuredWalletAuthNetworks = parseList(process.env.WALLET_AUTH_ALLOWED_NETWORKS);
+
   const config: AppConfig = {
     port: Number(process.env.PORT ?? 3000),
     ipfsApiUrl: process.env.IPFS_API_URL ?? 'http://ipfs:5001',
@@ -211,6 +241,12 @@ export function getConfig(): AppConfig {
       'WALLET_AUTH_TOKEN_TTL_SECONDS'
     ),
     uploadMaxSizeBytes: parseNumber(process.env.UPLOAD_MAX_SIZE_BYTES, 100 * 1024 * 1024, 'UPLOAD_MAX_SIZE_BYTES'),
+    privateStoragePath: process.env.PRIVATE_STORAGE_PATH ?? './data/private-objects',
+    privateObjectMaxSizeBytes: parsePositiveInteger(
+      process.env.PRIVATE_OBJECT_MAX_SIZE_BYTES,
+      100 * 1024 * 1024,
+      'PRIVATE_OBJECT_MAX_SIZE_BYTES'
+    ),
     gatewayMaxContentSizeBytes: parseNumber(process.env.GATEWAY_MAX_CONTENT_SIZE_BYTES, 50 * 1024 * 1024, 'GATEWAY_MAX_CONTENT_SIZE_BYTES'),
     gatewayCacheMaxSizeBytes: parseNumber(process.env.GATEWAY_CACHE_MAX_SIZE_BYTES, 100 * 1024 * 1024, 'GATEWAY_CACHE_MAX_SIZE_BYTES'),
     gatewayCacheControlMaxAgeSeconds: parseNumber(
@@ -222,6 +258,13 @@ export function getConfig(): AppConfig {
       process.env.RATE_LIMIT_REQUESTS_PER_MINUTE,
       120,
       'RATE_LIMIT_REQUESTS_PER_MINUTE'
+    ),
+    walletAuthAllowedNetworks: configuredWalletAuthNetworks.length > 0
+      ? configuredWalletAuthNetworks
+      : ['eip155:167000', 'eip155:8453'],
+    walletAuthEip1271RpcUrls: parseKeyValueMap(
+      process.env.WALLET_AUTH_EIP1271_RPC_URLS,
+      'WALLET_AUTH_EIP1271_RPC_URLS'
     ),
     x402FacilitatorUrl: process.env.X402_FACILITATOR_URL ?? 'https://facilitator.taiko.xyz',
     x402Network: process.env.X402_NETWORK ?? 'eip155:167000',
