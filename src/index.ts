@@ -8,9 +8,11 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { getConfig } from './config';
 import { createDb } from './db';
 import { PinRepository } from './repositories/pin-repository';
+import { WalletAuthChallengeRepository } from './repositories/wallet-auth-challenge-repository';
 import { IpfsRpcClient } from './services/ipfs-rpc-client';
 import { createApp } from './app';
 import { PinningService } from './services/pinning-service';
+import { WalletLoginService } from './services/wallet-login';
 import { createX402PaymentMiddleware } from './services/x402';
 import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
@@ -47,6 +49,17 @@ const config = getConfig();
 const appVersion = getAppVersion();
 const db = createDb(config.dbPath);
 const repository = new PinRepository(db);
+const walletAuthConfig = {
+  secret: config.walletAuthTokenSecret,
+  issuer: config.walletAuthTokenIssuer,
+  audience: config.walletAuthTokenAudience,
+  ttlSeconds: config.walletAuthTokenTtlSeconds
+};
+const walletLoginService = new WalletLoginService(new WalletAuthChallengeRepository(db), {
+  walletAuth: walletAuthConfig,
+  allowedNetworks: config.walletAuthAllowedNetworks,
+  eip1271RpcUrls: config.walletAuthEip1271RpcUrls
+});
 const ipfsClient = new IpfsRpcClient(config.ipfsApiUrl, {
   timeoutMs: config.ipfsTimeoutMs,
   contentTimeoutMs: Math.max(config.ipfsTimeoutMs, 60000)
@@ -311,12 +324,8 @@ const app = createApp({
   paymentMiddleware,
   mppMiddleware,
   mppChallengeEnhancer,
-  walletAuth: {
-    secret: config.walletAuthTokenSecret,
-    issuer: config.walletAuthTokenIssuer,
-    audience: config.walletAuthTokenAudience,
-    ttlSeconds: config.walletAuthTokenTtlSeconds
-  },
+  walletAuth: walletAuthConfig,
+  walletLoginService,
   gatewayCacheControlMaxAgeSeconds: config.gatewayCacheControlMaxAgeSeconds,
   uploadMaxSizeBytes: config.uploadMaxSizeBytes,
   publicBaseUrl: config.publicBaseUrl,

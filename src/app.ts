@@ -25,6 +25,7 @@ import {
   X402_SPEC_URL,
   type WalletAuthConfig
 } from './services/x402';
+import type { WalletLoginService } from './services/wallet-login';
 import { formatPinningPriceFormula } from './services/payment/pricing';
 import type { AgentCardConfig, PinStatusValue } from './types';
 import { landingPageHtml } from './landing';
@@ -361,6 +362,7 @@ export interface AppServices {
   mppMiddleware?: MiddlewareHandler;
   mppChallengeEnhancer?: MiddlewareHandler;
   walletAuth: WalletAuthConfig;
+  walletLoginService?: WalletLoginService;
   gatewayCacheControlMaxAgeSeconds?: number;
   uploadMaxSizeBytes?: number;
   publicBaseUrl?: string;
@@ -583,6 +585,53 @@ Machine-readable A2A agent card: GET /.well-known/agent.json
         }
       }, 503);
     }
+  });
+
+  app.post('/auth/challenge', async (c) => {
+    if (!services.walletLoginService) {
+      throw new HTTPException(404, { message: 'wallet login is not enabled' });
+    }
+
+    const body = await parseJsonBody(c);
+    if (!body || typeof body !== 'object') {
+      throw new ValidationError('Payload must be an object');
+    }
+
+    const payload = body as Record<string, unknown>;
+    const address = typeof payload.address === 'string' ? payload.address : '';
+    const network = typeof payload.network === 'string' ? payload.network : undefined;
+    const chainId = typeof payload.chainId === 'number' ? payload.chainId : undefined;
+    const origin = publicBaseUrl ?? new URL(c.req.url).origin;
+
+    const challenge = services.walletLoginService.createChallenge({
+      address,
+      network,
+      chainId,
+      origin
+    });
+
+    return c.json(challenge, 201, { 'Cache-Control': 'no-store' });
+  });
+
+  app.post('/auth/token', async (c) => {
+    if (!services.walletLoginService) {
+      throw new HTTPException(404, { message: 'wallet login is not enabled' });
+    }
+
+    const body = await parseJsonBody(c);
+    if (!body || typeof body !== 'object') {
+      throw new ValidationError('Payload must be an object');
+    }
+
+    const payload = body as Record<string, unknown>;
+    const message = typeof payload.message === 'string' ? payload.message : '';
+    const signature = typeof payload.signature === 'string' ? payload.signature : '';
+    const result = await services.walletLoginService.exchangeToken({ message, signature });
+
+    c.header(WALLET_AUTH_TOKEN_RESPONSE_HEADER, result.token);
+    c.header(WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER, result.expiresAt);
+    c.header('Cache-Control', 'no-store');
+    return c.json(result);
   });
 
   app.get('/.well-known/agent.json', (c) => {

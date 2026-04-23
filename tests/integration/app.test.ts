@@ -3,14 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { decodePaymentRequiredHeader, encodePaymentSignatureHeader } from '@x402/core/http';
 import type { FacilitatorClient } from '@x402/core/server';
 import type { PaymentPayload, PaymentRequirements } from '@x402/core/types';
+import { privateKeyToAccount } from 'viem/accounts';
 import { createApp } from '../../src/app';
 import { createDb } from '../../src/db';
 import { GatewayTimeoutError, UpstreamServiceError } from '../../src/lib/errors';
 import { PinRepository } from '../../src/repositories/pin-repository';
+import { WalletAuthChallengeRepository } from '../../src/repositories/wallet-auth-challenge-repository';
 import type { IpfsClient } from '../../src/services/ipfs-rpc-client';
 import { GatewayContentCache } from '../../src/services/content-cache';
 import { PinningService } from '../../src/services/pinning-service';
 import { InMemoryRateLimiter } from '../../src/services/rate-limiter';
+import { WalletLoginService } from '../../src/services/wallet-login';
 import {
   createX402PaymentMiddleware,
   WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER,
@@ -256,6 +259,12 @@ describe('API integration', () => {
       pinningService: service,
       paymentMiddleware,
       walletAuth: walletAuthConfig,
+      walletLoginService: new WalletLoginService(new WalletAuthChallengeRepository(db), {
+        walletAuth: walletAuthConfig,
+        allowedNetworks: ['eip155:167000', 'eip155:8453'],
+        eip1271RpcUrls: {},
+        challengeTtlSeconds: 600
+      }),
       defaultDurationMonths: 1,
       maxDurationMonths: 24,
       ...overrides
@@ -454,6 +463,42 @@ describe('API integration', () => {
 
     expect(response.status).toBe(401);
     expect(await response.text()).toContain('invalid wallet auth token');
+  });
+
+  it('exchanges an OWS-compatible wallet signature for an owner token', async () => {
+    const account = privateKeyToAccount(`0x${'3'.repeat(64)}`);
+    const challengeRes = await app.request(
+      new Request('http://localhost/auth/challenge', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          address: account.address,
+          network: 'eip155:8453'
+        })
+      })
+    );
+    expect(challengeRes.status).toBe(201);
+    const challenge = await challengeRes.json() as { message: string; network: string; chainId: number };
+    expect(challenge.network).toBe('eip155:8453');
+    expect(challenge.chainId).toBe(8453);
+
+    const signature = await account.signMessage({ message: challenge.message });
+    const tokenRes = await app.request(
+      new Request('http://localhost/auth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: challenge.message,
+          signature
+        })
+      })
+    );
+
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = await tokenRes.json() as { wallet: string; token: string };
+    expect(tokenBody.wallet).toBe(account.address.toLowerCase());
+    expect(tokenBody.token).toBeTruthy();
+    expect(tokenRes.headers.get(WALLET_AUTH_TOKEN_RESPONSE_HEADER)).toBe(tokenBody.token);
   });
 
   it('uploads and fetches IPFS content', async () => {
