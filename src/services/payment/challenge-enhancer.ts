@@ -1,4 +1,3 @@
-import { decodePaymentRequiredHeader } from '@x402/core/http';
 import type { Context, MiddlewareHandler } from 'hono';
 import { extractPaymentAuthorizationCredential } from './http.js';
 import type { MppPaymentRequirement, MppxChargeHandler } from './middleware.js';
@@ -6,53 +5,10 @@ import type { MppPaymentRequirement, MppxChargeHandler } from './middleware.js';
 interface MppChallengeEnhancerConfig {
   mppx: MppxChargeHandler;
   requirementFn: (c: Context) => MppPaymentRequirement | null | Promise<MppPaymentRequirement | null>;
-  assetDecimals: number;
-}
-
-function assetAmountToDecimalString(amount: string, decimals: number): string | null {
-  if (!/^\d+$/.test(amount)) {
-    return null;
-  }
-
-  const zeroPadded = amount.padStart(decimals + 1, '0');
-  const integerPart = zeroPadded.slice(0, zeroPadded.length - decimals) || '0';
-  const fractionalPart = zeroPadded.slice(zeroPadded.length - decimals).replace(/0+$/, '');
-
-  return fractionalPart.length > 0 ? `${integerPart}.${fractionalPart}` : integerPart;
-}
-
-async function resolveChallengeRequirement(
-  c: Context,
-  requirementFn: (c: Context) => MppPaymentRequirement | null | Promise<MppPaymentRequirement | null>,
-  assetDecimals: number
-): Promise<MppPaymentRequirement | null> {
-  const paymentRequiredHeader = c.res.headers.get('payment-required');
-  if (paymentRequiredHeader) {
-    try {
-      const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader);
-      const accepted = paymentRequired.accepts[0];
-      if (accepted) {
-        const amount = accepted.amount;
-        if (typeof amount === 'string') {
-          const price = assetAmountToDecimalString(amount, assetDecimals);
-          if (price !== null) {
-            return {
-              amount: price,
-              recipient: typeof accepted.payTo === 'string' ? accepted.payTo : undefined,
-            };
-          }
-        }
-      }
-    } catch {
-      // Fall back to route-specific pricing when the x402 header is unavailable or malformed.
-    }
-  }
-
-  return requirementFn(c);
 }
 
 export function createMppChallengeEnhancer(config: MppChallengeEnhancerConfig): MiddlewareHandler {
-  const { mppx, requirementFn, assetDecimals } = config;
+  const { mppx, requirementFn } = config;
 
   return async (c, next) => {
     await next();
@@ -65,7 +21,14 @@ export function createMppChallengeEnhancer(config: MppChallengeEnhancerConfig): 
       return;
     }
 
-    const requirement = await resolveChallengeRequirement(c, requirementFn, assetDecimals);
+    // Always consult requirementFn — it's the MPP-specific source of truth for
+    // both amount and recipient. A previous revision read `accepts[0].payTo`
+    // from the x402 payment-required header as an optimization, but that made
+    // the MPP challenge advertise the x402 Taiko wallet instead of the MPP
+    // Tempo wallet once the two env vars were split. The amount parity with
+    // x402 is preserved because both paths derive price from the same pricing
+    // config via `resolvePinPriceUsd` / `resolveUploadPriceUsd`.
+    const requirement = await requirementFn(c);
     if (!requirement) {
       return;
     }

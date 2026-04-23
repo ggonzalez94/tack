@@ -66,27 +66,37 @@ const pinningService = new PinningService(repository, ipfsClient, config.delegat
   maxGatewayContentSizeBytes: config.gatewayMaxContentSizeBytes,
   replicas: replicaClients
 });
+// Build the x402 chains array with the operator-configured primary chain
+// first (Taiko by default) and Base always appended. If the operator has
+// explicitly set X402_NETWORK to Base, treat Base as the primary and skip
+// the implicit append so we never emit duplicate accepts entries for the
+// same network. Taiko remaining at accepts[0] is a load-bearing invariant
+// for the MPP challenge enhancer's price parity logic; dedupe by network
+// string is the simplest way to preserve it across all X402_NETWORK values.
+const primaryX402Chain = {
+  network: config.x402Network as `${string}:${string}`,
+  facilitatorUrl: config.x402FacilitatorUrl,
+  payTo: config.x402TaikoPayTo,
+  usdcAssetAddress: config.x402UsdcAssetAddress,
+  usdcAssetDecimals: config.x402UsdcAssetDecimals,
+  usdcDomainName: config.x402UsdcDomainName,
+  usdcDomainVersion: config.x402UsdcDomainVersion
+};
+const baseX402Chain = {
+  network: BASE_CHAIN.network,
+  facilitatorUrl: BASE_CHAIN.facilitatorUrl,
+  payTo: config.x402BasePayTo,
+  usdcAssetAddress: BASE_CHAIN.usdcAssetAddress,
+  usdcAssetDecimals: BASE_CHAIN.usdcAssetDecimals,
+  usdcDomainName: BASE_CHAIN.usdcDomainName,
+  usdcDomainVersion: BASE_CHAIN.usdcDomainVersion
+};
+const x402Chains = primaryX402Chain.network === baseX402Chain.network
+  ? [primaryX402Chain]
+  : [primaryX402Chain, baseX402Chain];
+
 const paymentMiddleware = createX402PaymentMiddleware({
-  chains: [
-    {
-      network: config.x402Network as `${string}:${string}`,
-      facilitatorUrl: config.x402FacilitatorUrl,
-      payTo: config.x402TaikoPayTo,
-      usdcAssetAddress: config.x402UsdcAssetAddress,
-      usdcAssetDecimals: config.x402UsdcAssetDecimals,
-      usdcDomainName: config.x402UsdcDomainName,
-      usdcDomainVersion: config.x402UsdcDomainVersion
-    },
-    {
-      network: BASE_CHAIN.network,
-      facilitatorUrl: BASE_CHAIN.facilitatorUrl,
-      payTo: config.x402BasePayTo,
-      usdcAssetAddress: BASE_CHAIN.usdcAssetAddress,
-      usdcAssetDecimals: BASE_CHAIN.usdcAssetDecimals,
-      usdcDomainName: BASE_CHAIN.usdcDomainName,
-      usdcDomainVersion: BASE_CHAIN.usdcDomainVersion
-    }
-  ],
+  chains: x402Chains,
   ratePerGbMonthUsd: config.x402RatePerGbMonthUsd,
   minPriceUsd: config.x402MinPriceUsd,
   maxPriceUsd: config.x402MaxPriceUsd,
@@ -292,7 +302,6 @@ const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
   ? createMppChallengeEnhancer({
       mppx,
       requirementFn: resolveMppRequirement,
-      assetDecimals: config.x402UsdcAssetDecimals,
     })
   : undefined;
 
@@ -322,16 +331,10 @@ const app = createApp({
     name: 'Tack',
     description: 'Pin to IPFS, pay with your wallet. No account needed.',
     version: appVersion,
-    x402Chains: [
-      {
-        network: config.x402Network,
-        usdcAssetAddress: config.x402UsdcAssetAddress,
-      },
-      {
-        network: BASE_CHAIN.network,
-        usdcAssetAddress: BASE_CHAIN.usdcAssetAddress,
-      }
-    ],
+    x402Chains: x402Chains.map((chain) => ({
+      network: chain.network,
+      usdcAssetAddress: chain.usdcAssetAddress,
+    })),
     x402RatePerGbMonthUsd: config.x402RatePerGbMonthUsd,
     x402MinPriceUsd: config.x402MinPriceUsd,
     x402MaxPriceUsd: config.x402MaxPriceUsd,
