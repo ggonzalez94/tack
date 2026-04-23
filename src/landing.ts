@@ -8,7 +8,7 @@ export function landingPageHtml(): string {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Tack — Storage for agents.</title>
-  <meta name="description" content="IPFS pinning your autonomous agent calls directly. Pay-per-pin in USDC, no accounts, no API keys. Live on Taiko and Tempo." />
+  <meta name="description" content="IPFS pinning your autonomous agent calls directly. Pay-per-pin in USDC, no accounts, no API keys. Live on Taiko, Base, and Tempo." />
   <meta name="theme-color" content="#05070d" />
 
   <meta property="og:type" content="website" />
@@ -51,6 +51,7 @@ export function landingPageHtml(): string {
 
       /* Tiny, reserved */
       --tempo-300: #8b5cf6;
+      --base-300:  #3d7aff;
       --signal:    #6ae3a1;
       --paper:     #ede7d8;
 
@@ -171,7 +172,7 @@ export function landingPageHtml(): string {
       text-transform: uppercase;
       letter-spacing: 0.18em;
       color: var(--ink-400);
-      display: inline-flex; align-items: center; gap: 12px;
+      display: inline-flex; align-items: center; flex-wrap: wrap; gap: 12px;
       margin-bottom: 40px;
     }
     .eyebrow .live {
@@ -414,8 +415,30 @@ export function landingPageHtml(): string {
       content: ''; position: absolute; inset: 0 0 auto 0; height: 2px;
       background: var(--_c);
     }
-    .rail-card.c-taiko { --_c: var(--pink-300); }
     .rail-card.c-tempo { --_c: var(--tempo-300); }
+    .rail-card.c-x402  { --_c: var(--pink-300); --_c2: var(--base-300); }
+
+    /* Split top accent for the multi-chain x402 card */
+    .rail-card.c-x402::before {
+      background: linear-gradient(90deg, var(--pink-300) 0%, var(--pink-300) 50%, var(--base-300) 50%, var(--base-300) 100%);
+    }
+    .rail-card.c-x402:hover { border-color: color-mix(in oklab, var(--_c) 60%, var(--_c2) 40%); }
+
+    /* Header with two chain pills for the multi-chain x402 card */
+    .rail-chains {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .rail-chain.c-taiko {
+      color: var(--pink-300);
+      background: color-mix(in oklab, var(--pink-300) 14%, transparent);
+    }
+    .rail-chain.c-base {
+      color: var(--base-300);
+      background: color-mix(in oklab, var(--base-300) 14%, transparent);
+    }
     .rail-card:hover { border-color: var(--_c); transform: translateY(-2px); }
     .rail-card-head {
       display: flex; align-items: baseline; justify-content: space-between;
@@ -1095,6 +1118,7 @@ export function landingPageHtml(): string {
     }
     .rail-chip .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
     .rail-chip .dot.taiko { background: var(--pink-300); }
+    .rail-chip .dot.base  { background: var(--base-300); }
     .rail-chip .dot.tempo { background: var(--tempo-300); }
 
     /* Code block */
@@ -1111,7 +1135,15 @@ export function landingPageHtml(): string {
       border-bottom: 1px solid rgba(255,255,255,0.06);
     }
     .code-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-700); }
-    .code-tabs { display: flex; margin-left: 8px; gap: 3px; flex: 1; }
+    .code-tabs {
+      display: flex;
+      margin-left: 8px;
+      gap: 3px;
+      flex: 1;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .code-tabs::-webkit-scrollbar { display: none; }
     .code-tab {
       padding: 6px 11px;
       border-radius: 6px;
@@ -1123,6 +1155,8 @@ export function landingPageHtml(): string {
       cursor: pointer;
       transition: all 0.15s;
       display: inline-flex; align-items: center; gap: 7px;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .code-tab:hover { color: var(--ink-100); }
     .code-tab[aria-selected="true"] {
@@ -1131,9 +1165,12 @@ export function landingPageHtml(): string {
       color: var(--ink-50);
     }
     .code-tab-dot { width: 6px; height: 6px; border-radius: 50%; }
-    .code-tab-dot.taiko { background: var(--pink-300); }
     .code-tab-dot.tempo { background: var(--tempo-300); }
     .code-tab-dot.neutral { background: var(--ink-400); }
+    /* Split dot for tabs that serve more than one chain */
+    .code-tab-dot.x402-split {
+      background: linear-gradient(90deg, var(--pink-300) 0 50%, var(--base-300) 50% 100%);
+    }
     .code-pane { display: none; }
     .code-pane[data-active="true"] { display: block; }
     .code-block pre {
@@ -1255,6 +1292,7 @@ export function landingPageHtml(): string {
     .trust-item strong { color: var(--ink-100); font-weight: 500; }
     .trust-dot { width: 6px; height: 6px; border-radius: 50%; }
     .trust-dot.taiko { background: var(--pink-300); }
+    .trust-dot.base  { background: var(--base-300); }
     .trust-dot.tempo { background: var(--tempo-300); }
     .trust-dot.ipfs  { background: #65c2cb; }
     .trust-dot.a2a   { background: var(--signal); }
@@ -1313,6 +1351,8 @@ export function landingPageHtml(): string {
               <span class="live"><span class="live-dot" aria-hidden="true"></span>LIVE</span>
               <span class="sep">·</span>
               <span>Taiko</span>
+              <span class="sep">·</span>
+              <span>Base</span>
               <span class="sep">·</span>
               <span>Tempo</span>
             </div>
@@ -1479,7 +1519,7 @@ export function landingPageHtml(): string {
           </li>
           <li>
             <span class="ord">STEP&nbsp;02</span>
-            <span class="step">Agent <em>signs</em> one on-chain payment. x402 on Taiko, MPP on Tempo.</span>
+            <span class="step">Agent <em>signs</em> one on-chain payment. x402 on Taiko or Base, MPP on Tempo.</span>
           </li>
           <li>
             <span class="ord">STEP&nbsp;03</span>
@@ -1513,7 +1553,7 @@ export function landingPageHtml(): string {
               </button>
             </div>
             <p class="endpoint-note">
-              Your agent needs <strong>USDC on Taiko</strong> or <strong>USDC.e on Tempo</strong>. No ETH, no API keys.
+              Your agent needs <strong>USDC on Taiko or Base</strong>, or <strong>USDC.e on Tempo</strong>. No ETH, no API keys.
             </p>
             <ul class="endpoint-check">
               <li>
@@ -1527,6 +1567,7 @@ export function landingPageHtml(): string {
             </ul>
             <div class="rails-row">
               <span class="rail-chip"><span class="dot taiko" aria-hidden="true"></span>x402 · Taiko <span class="num" style="color:var(--ink-400);">167000</span></span>
+              <span class="rail-chip"><span class="dot base" aria-hidden="true"></span>x402 · Base <span class="num" style="color:var(--ink-400);">8453</span></span>
               <span class="rail-chip"><span class="dot tempo" aria-hidden="true"></span>MPP · Tempo <span class="num" style="color:var(--ink-400);">4217</span></span>
             </div>
           </aside>
@@ -1538,7 +1579,7 @@ export function landingPageHtml(): string {
               <div class="code-dot" aria-hidden="true"></div>
               <div class="code-tabs" role="tablist" aria-label="Choose client">
                 <button class="code-tab" role="tab" aria-selected="true" aria-controls="code-x402" id="tab-x402" data-tab="x402">
-                  <span class="code-tab-dot taiko" aria-hidden="true"></span>x402 · Taiko
+                  <span class="code-tab-dot x402-split" aria-hidden="true"></span>x402 · Taiko / Base
                 </button>
                 <button class="code-tab" role="tab" aria-selected="false" aria-controls="code-mpp" id="tab-mpp" data-tab="mpp">
                   <span class="code-tab-dot tempo" aria-hidden="true"></span>MPP · Tempo
@@ -1554,20 +1595,20 @@ export function landingPageHtml(): string {
 <span class="k">import</span> { ExactEvmScheme, toClientEvmSigner } <span class="k">from</span> <span class="s">"@x402/evm"</span>;
 <span class="k">import</span> { privateKeyToAccount } <span class="k">from</span> <span class="s">"viem/accounts"</span>;
 <span class="k">import</span> { createPublicClient, http } <span class="k">from</span> <span class="s">"viem"</span>;
-<span class="k">import</span> { taiko } <span class="k">from</span> <span class="s">"viem/chains"</span>;
+<span class="k">import</span> { taiko, base } <span class="k">from</span> <span class="s">"viem/chains"</span>;
 
-<span class="k">const</span> account = <span class="f">privateKeyToAccount</span>(<span class="s">"0x..."</span>);  <span class="c">// holds USDC on Taiko</span>
-<span class="k">const</span> rpc     = <span class="f">createPublicClient</span>({ chain: taiko, transport: <span class="f">http</span>() });
-<span class="k">const</span> signer  = <span class="f">toClientEvmSigner</span>(account, rpc);
+<span class="k">const</span> account  = <span class="f">privateKeyToAccount</span>(<span class="s">"0x..."</span>);  <span class="c">// holds USDC on Taiko or Base</span>
+<span class="k">const</span> taikoSig = <span class="f">toClientEvmSigner</span>(account, <span class="f">createPublicClient</span>({ chain: taiko, transport: <span class="f">http</span>() }));
+<span class="k">const</span> baseSig  = <span class="f">toClientEvmSigner</span>(account, <span class="f">createPublicClient</span>({ chain: base,  transport: <span class="f">http</span>() }));
 
 <span class="k">const</span> pay = <span class="f">wrapFetchWithPaymentFromConfig</span>(fetch, {
-  schemes: [{
-    network: <span class="s">"eip155:<span class="n">167000</span>"</span>,   <span class="c">// Taiko</span>
-    client: <span class="k">new</span> <span class="f">ExactEvmScheme</span>(signer),
-  }],
+  schemes: [
+    { network: <span class="s">"eip155:<span class="n">167000</span>"</span>, client: <span class="k">new</span> <span class="f">ExactEvmScheme</span>(taikoSig) }, <span class="c">// Taiko</span>
+    { network: <span class="s">"eip155:<span class="n">8453</span>"</span>,   client: <span class="k">new</span> <span class="f">ExactEvmScheme</span>(baseSig)  }, <span class="c">// Base</span>
+  ],
 });
 
-<span class="c">// Pin a CID for 6 months. USDC on Taiko.</span>
+<span class="c">// Pin a CID for 6 months. USDC on whichever chain your wallet holds.</span>
 <span class="k">const</span> res = <span class="k">await</span> <span class="f">pay</span>(<span class="s">"${o}/pins"</span>, {
   method: <span class="s">"POST"</span>,
   headers: { <span class="s">"X-Pin-Duration-Months"</span>: <span class="s">"6"</span> },
@@ -1600,10 +1641,13 @@ export function landingPageHtml(): string {
   -d <span class="s">'{"cid":"Qm..."}'</span>
 
 <span class="c"># → HTTP/1.1 402 Payment Required
-# → payment-required:   {network:"eip155:167000", asset:"USDC", amount:"0.10"}
-# → WWW-Authenticate: Payment method="tempo", chainId=4217
+# → payment-required:   accepts=[
+# →   {network:"eip155:167000", asset:"USDC", amount:"0.10"},  # Taiko
+# →   {network:"eip155:8453",   asset:"USDC", amount:"0.10"},  # Base
+# → ]
+# → WWW-Authenticate: Payment method="tempo", chainId=4217     # Tempo (MPP)
 
-# Sign with x402 or MPP, retry with the header. Tack pins, returns 202.</span></code></pre>
+# Pick any chain your wallet holds. Sign, retry. Tack pins, returns 202.</span></code></pre>
             </div>
           </div>
 
@@ -1616,24 +1660,27 @@ export function landingPageHtml(): string {
         <div class="rails-head">
           <div>
             <div class="section-label" style="margin-bottom: 10px;"><span class="ord">§ 05</span><span class="sep">/</span><span>Rails</span></div>
-            <div class="rails-title">Two protocols. <em>Two chains.</em> Same endpoints.</div>
+            <div class="rails-title">Two protocols. <em>Three chains.</em> Same endpoints.</div>
           </div>
           <div class="rails-sub">your agent picks whichever its wallet already holds</div>
         </div>
 
         <div class="rails-pair">
 
-          <article class="rail-card c-taiko">
+          <article class="rail-card c-x402">
             <div class="rail-card-head">
               <div class="rail-proto">x402<span style="color:var(--pink-300); font-style: italic;">.</span></div>
-              <div class="rail-chain">Taiko</div>
+              <div class="rail-chains">
+                <span class="rail-chain c-taiko">Taiko</span>
+                <span class="rail-chain c-base">Base</span>
+              </div>
             </div>
             <p class="rail-blurb">
-              HTTP 402 + <em>EIP-3009</em>. Your agent signs a <code class="mono" style="font-size:0.92em; color:var(--ink-100);">transferWithAuthorization</code> once &mdash; a facilitator settles it. No gas needed.
+              HTTP 402 + <em>EIP-3009</em>. Your agent signs a <code class="mono" style="font-size:0.92em; color:var(--ink-100);">transferWithAuthorization</code> once &mdash; a facilitator settles it on whichever chain it already holds <code class="mono" style="font-size:0.92em; color:var(--ink-100);">USDC</code>. No gas needed.
             </p>
             <div class="rail-spec">
               <div class="rail-spec-row"><span class="rail-spec-k">Asset</span><span class="rail-spec-v">USDC</span></div>
-              <div class="rail-spec-row"><span class="rail-spec-k">Chain</span><span class="rail-spec-v"><span class="accent">167000</span> &middot; Taiko</span></div>
+              <div class="rail-spec-row"><span class="rail-spec-k">Chains</span><span class="rail-spec-v"><span style="color:var(--pink-300);">167000</span> &middot; Taiko &nbsp;·&nbsp; <span style="color:var(--base-300);">8453</span> &middot; Base</span></div>
               <div class="rail-spec-row"><span class="rail-spec-k">Scheme</span><span class="rail-spec-v">ExactEvm</span></div>
               <div class="rail-spec-row"><span class="rail-spec-k">Header</span><span class="rail-spec-v"><span class="accent">payment-signature</span></span></div>
             </div>
@@ -1734,7 +1781,7 @@ export function landingPageHtml(): string {
                   <tr>
                     <td>Chains</td>
                     <td class="c-legacy">Base</td>
-                    <td class="c-tack">Taiko &middot; Tempo</td>
+                    <td class="c-tack">Taiko &middot; Base &middot; Tempo</td>
                   </tr>
                   <tr>
                     <td>Payment protocols</td>
@@ -1764,7 +1811,7 @@ export function landingPageHtml(): string {
             <ul class="price-facts">
               <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-                <span>Settled in <code>USDC</code> on Taiko or <code>USDC.e</code> on Tempo.</span>
+                <span>Settled in <code>USDC</code> on Taiko or Base, or <code>USDC.e</code> on Tempo.</span>
               </li>
               <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
@@ -1908,6 +1955,7 @@ export function landingPageHtml(): string {
 
           <div class="trust" aria-label="Ecosystem">
             <div class="trust-item"><span class="trust-dot taiko" aria-hidden="true"></span><strong>Taiko</strong> <span class="num">167000</span></div>
+            <div class="trust-item"><span class="trust-dot base" aria-hidden="true"></span><strong>Base</strong> <span class="num">8453</span></div>
             <div class="trust-item"><span class="trust-dot tempo" aria-hidden="true"></span><strong>Tempo</strong> <span class="num">4217</span></div>
             <div class="trust-item"><span class="trust-dot ipfs" aria-hidden="true"></span><strong>IPFS</strong> Kubo</div>
             <div class="trust-item"><span class="trust-dot a2a" aria-hidden="true"></span><strong>A2A</strong> agent card</div>
