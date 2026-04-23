@@ -651,6 +651,8 @@ ${protocolsBlock}
 
 - POST /pins — Pin content by CID. Body: { cid, name?, origins?, meta? }. Optional header: X-Pin-Duration-Months.
 - POST /upload — Upload a file (multipart/form-data, field "file", max ${uploadMaxMb}MB). Returns { cid }.
+- POST /private/objects — Store a private object outside IPFS. Requires X-Content-Size-Bytes. Optional header: X-Storage-Duration-Months.
+- POST /private/objects/:objectId/renew — Extend private object retention. Requires owner token and payment.
 
 ### Gateway
 
@@ -662,6 +664,16 @@ ${protocolsBlock}
 - GET /pins/:requestid — Get a specific pin by request ID.
 - POST /pins/:requestid — Replace a pin. Same body as POST /pins.
 - DELETE /pins/:requestid — Delete a pin.
+- GET /private/objects — List your private objects.
+- GET /private/objects/:objectId — Get private object metadata.
+- GET /private/objects/:objectId/content — Retrieve private object bytes.
+- PATCH /private/objects/:objectId — Update private object metadata.
+- DELETE /private/objects/:objectId — Delete a private object.
+
+### Wallet Login
+
+- POST /auth/challenge — Create a SIWE message for a wallet and CAIP-2 network such as eip155:8453.
+- POST /auth/token — Exchange the signed SIWE message for an x-wallet-auth-token.
 
 ## Pinning Service API
 
@@ -800,6 +812,19 @@ Machine-readable A2A agent card: GET /.well-known/agent.json
         gateway: {
           endpoint: '/ipfs/:cid',
           supports: ['etag', 'range', 'cache-control', 'optional-paywall']
+        },
+        privateStorage: {
+          storage: 'not-ipfs',
+          visibility: 'owner-authenticated',
+          endpoints: [
+            '/private/objects',
+            '/private/objects/:objectId',
+            '/private/objects/:objectId/content'
+          ],
+          auth: {
+            session: 'Authorization: Bearer <token>',
+            walletLogin: ['/auth/challenge', '/auth/token']
+          }
         }
       },
       payments: {

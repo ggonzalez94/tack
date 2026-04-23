@@ -50,6 +50,15 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 | `POST` | `/pins/:requestid` | Wallet identity | Replace a pin |
 | `DELETE` | `/pins/:requestid` | Wallet identity | Delete a pin |
 | `GET` | `/ipfs/:cid` | None | Retrieve content (supports ETag, Range) |
+| `POST` | `/private/objects` | x402 or MPP payment | Store a private object outside IPFS |
+| `GET` | `/private/objects` | Wallet identity | List your private objects |
+| `GET` | `/private/objects/:objectId` | Wallet identity | Get private object metadata |
+| `GET` | `/private/objects/:objectId/content` | Wallet identity | Retrieve private object bytes |
+| `PATCH` | `/private/objects/:objectId` | Wallet identity | Update private object metadata |
+| `DELETE` | `/private/objects/:objectId` | Wallet identity | Delete a private object |
+| `POST` | `/private/objects/:objectId/renew` | Wallet identity + payment | Extend private object retention |
+| `POST` | `/auth/challenge` | None | Create a SIWE wallet login challenge |
+| `POST` | `/auth/token` | Wallet signature | Exchange a signed SIWE message for an owner token |
 | `GET` | `/health` | None | Service health check |
 | `GET` | `/.well-known/agent.json` | None | A2A agent discovery |
 
@@ -60,6 +69,15 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 **Gateway safety**: Tack serves browser-active content types with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff` so HTML/SVG/JS payloads are not executed inline from the API origin.
 
 **Retrieval pricing**: `meta.retrievalPrice` is controlled by the first wallet that pins a CID through Tack. Later pins of the same CID cannot redirect premium retrieval payouts.
+
+## Private Storage
+
+Tack can also store wallet-owned private objects that are not pinned to IPFS. Create objects with `POST /private/objects` using x402 or MPP payment, then read them with `Authorization: Bearer <x-wallet-auth-token>`. Returning clients can authenticate through SIWE:
+
+1. `POST /auth/challenge` with `{ "address": "0x...", "network": "eip155:8453" }`.
+2. Sign the returned message with a wallet or OWS:
+   `ows sign message --chain eip155:8453 --message "$SIWE_MESSAGE" --json`.
+3. `POST /auth/token` with the message and signature.
 
 ## For AI Agents
 

@@ -695,7 +695,10 @@ describe('API integration', () => {
     const agentCard = (await response.json()) as {
       endpoint: string;
       protocol: string;
-      capabilities: { pinningApi: { endpoints: string[] } };
+      capabilities: {
+        pinningApi: { endpoints: string[] };
+        privateStorage: { storage: string; visibility: string; endpoints: string[] };
+      };
       pricing: { retrieval: { metadataField: string }; pinning: { protocol: string; spec: string } };
       authentication: { walletAuthToken: { description: string; usage: string } };
       links: { x402Spec: string; x402ClientSdk: string; ipfsPinningSpec: string };
@@ -704,6 +707,9 @@ describe('API integration', () => {
     expect(agentCard.protocol).toBe('a2a');
     expect(agentCard.endpoint).toBe('http://localhost');
     expect(agentCard.capabilities.pinningApi.endpoints).toContain('/pins');
+    expect(agentCard.capabilities.privateStorage.storage).toBe('not-ipfs');
+    expect(agentCard.capabilities.privateStorage.visibility).toBe('owner-authenticated');
+    expect(agentCard.capabilities.privateStorage.endpoints).toContain('/private/objects');
     expect(agentCard.pricing.pinning.protocol).toBe('x402');
     expect(agentCard.pricing.pinning.spec).toBe('https://www.x402.org/');
     expect(agentCard.pricing.retrieval.metadataField).toBe('meta.retrievalPrice');
@@ -727,7 +733,7 @@ describe('API integration', () => {
 
     expect(doc.openapi).toBe('3.1.0');
     expect(Object.keys(doc.paths)).toEqual(
-      expect.arrayContaining(['/pins', '/pins/{requestid}', '/upload', '/ipfs/{cid}'])
+      expect.arrayContaining(['/pins', '/pins/{requestid}', '/upload', '/ipfs/{cid}', '/private/objects'])
     );
     expect(doc.components.securitySchemes.walletAuthToken.type).toBe('apiKey');
   });
