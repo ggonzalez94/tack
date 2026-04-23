@@ -35,19 +35,39 @@ const walletAuthConfig: WalletAuthConfig = {
   ttlSeconds: 900
 };
 
-const paymentConfig: X402PaymentConfig = {
+const taikoChain = {
+  network: 'eip155:167000' as const,
   facilitatorUrl: 'http://localhost:9999',
-  network: 'eip155:167000',
   payTo: '0x1111111111111111111111111111111111111111',
   usdcAssetAddress: '0x2222222222222222222222222222222222222222',
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
-  usdcDomainVersion: '2',
+  usdcDomainVersion: '2'
+};
+
+const paymentConfig: X402PaymentConfig = {
+  chains: [taikoChain],
   ratePerGbMonthUsd: 0.10,
   minPriceUsd: 0.001,
   maxPriceUsd: 50.0,
   defaultDurationMonths: 1,
   maxDurationMonths: 24
+};
+
+const multiChainPaymentConfig: X402PaymentConfig = {
+  ...paymentConfig,
+  chains: [
+    taikoChain,
+    {
+      network: 'eip155:8453',
+      facilitatorUrl: 'http://localhost:9998',
+      payTo: taikoChain.payTo,
+      usdcAssetAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      usdcAssetDecimals: 6,
+      usdcDomainName: 'USD Coin',
+      usdcDomainVersion: '2'
+    }
+  ]
 };
 
 function extractWallet(paymentPayload: PaymentPayload): string {
@@ -85,9 +105,15 @@ const mockFacilitator: FacilitatorClient = {
     signers: Record<string, string[]>;
   }> {
     return Promise.resolve({
-      kinds: [{ x402Version: 2, scheme: 'exact', network: paymentConfig.network }],
+      kinds: [
+        { x402Version: 2, scheme: 'exact', network: taikoChain.network },
+        { x402Version: 2, scheme: 'exact', network: 'eip155:8453' }
+      ],
       extensions: [],
-      signers: { [paymentConfig.network]: [paymentConfig.payTo] }
+      signers: {
+        [taikoChain.network]: [taikoChain.payTo],
+        'eip155:8453': [taikoChain.payTo]
+      }
     });
   }
 };
@@ -991,8 +1017,16 @@ describe('API integration', () => {
         name: 'Tack',
         description: 'Test agent',
         version: '0.0.1',
-        x402Network: 'eip155:8453',
-        x402UsdcAssetAddress: '0x2222222222222222222222222222222222222222',
+        x402Chains: [
+          {
+            network: 'eip155:167000',
+            usdcAssetAddress: '0x2222222222222222222222222222222222222222',
+          },
+          {
+            network: 'eip155:8453',
+            usdcAssetAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          }
+        ],
         x402RatePerGbMonthUsd: 0.10,
         x402MinPriceUsd: 0.001,
         x402MaxPriceUsd: 50.0,
@@ -1014,6 +1048,8 @@ describe('API integration', () => {
       };
       pricing: {
         pinning: {
+          network?: string;
+          asset?: string;
           ratePerGbMonthUsd: number;
           minPriceUsd: number;
           maxPriceUsd: number;
@@ -1030,12 +1066,17 @@ describe('API integration', () => {
     expect(card.pricing.pinning.defaultDurationMonths).toBe(1);
     expect(card.pricing.pinning.maxDurationMonths).toBe(24);
     expect(card.pricing.pinning.durationHeader).toBe('X-Pin-Duration-Months');
-    expect(card.payments.protocols.map((protocol) => protocol.protocol)).toEqual(['x402', 'mpp']);
-    expect(card.payments.protocols[0]).toMatchObject({
-      protocol: 'x402',
-      chainId: 8453,
-    });
-    expect(card.payments.protocols[0]?.chain).toBeUndefined();
+
+    const x402Protocols = card.payments.protocols.filter((p) => p.protocol === 'x402');
+    expect(x402Protocols).toHaveLength(2);
+    expect(x402Protocols[0]).toMatchObject({ chainId: 167000, chain: 'taiko' });
+    expect(x402Protocols[1]).toMatchObject({ chainId: 8453, chain: 'base' });
+
+    const mppProtocol = card.payments.protocols.find((p) => p.protocol === 'mpp');
+    expect(mppProtocol).toMatchObject({ chain: 'tempo', chainId: 4217 });
+
+    expect(card.pricing.pinning.network).toBe('eip155:167000');
+    expect(card.pricing.pinning.asset).toBe('0x2222222222222222222222222222222222222222');
   });
 
   it('enforces wallet ownership when listing and deleting pins', async () => {
@@ -1135,10 +1176,10 @@ describe('API integration', () => {
     ): ReturnType<typeof createApp> {
       const requirementFn = (c: { req: { path: string; method: string } }) => {
         if (c.req.path === '/pins' && c.req.method === 'POST') {
-          return { amount: '0.001', recipient: paymentConfig.payTo };
+          return { amount: '0.001', recipient: taikoChain.payTo };
         }
         if (c.req.path === '/upload' && c.req.method === 'POST') {
-          return { amount: '0.001', recipient: paymentConfig.payTo };
+          return { amount: '0.001', recipient: taikoChain.payTo };
         }
         return null;
       };
@@ -1176,7 +1217,7 @@ describe('API integration', () => {
       expect(paymentRequired).toBeTruthy();
       const decoded = decodePaymentRequiredHeader(paymentRequired!);
       expect(decoded.accepts[0].scheme).toBe('exact');
-      expect(decoded.accepts[0].network).toBe(paymentConfig.network);
+      expect(decoded.accepts[0].network).toBe(taikoChain.network);
 
       const wwwAuth = res.headers.get('www-authenticate');
       expect(wwwAuth).toContain('Payment');
@@ -1325,6 +1366,37 @@ describe('API integration', () => {
       const body = await res.json() as { type: string; title: string; status: number };
       expect(body.type).toBe('https://mpp.dev/errors/payer-resolution-failed');
       expect(body.status).toBe(500);
+    });
+  });
+
+  describe('multi-chain x402', () => {
+    it('advertises both Taiko and Base in the 402 payment-required header', async () => {
+      const multiChainApp = createApp({
+        pinningService: service,
+        paymentMiddleware: createX402PaymentMiddleware(multiChainPaymentConfig, mockFacilitator),
+        walletAuth: walletAuthConfig,
+        defaultDurationMonths: 1,
+        maxDurationMonths: 24
+      });
+
+      const res = await multiChainApp.request(
+        new Request('http://localhost/pins', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ cid: 'bafy-test' })
+        })
+      );
+
+      expect(res.status).toBe(402);
+
+      const paymentRequiredHeader = res.headers.get('payment-required');
+      expect(paymentRequiredHeader).toBeTruthy();
+
+      const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader!);
+      const networks = paymentRequired.accepts.map((a) => a.network);
+      expect(networks).toEqual(['eip155:167000', 'eip155:8453']);
+      // Price parity: same USD price → same asset amount (both USDC, 6 decimals).
+      expect(paymentRequired.accepts[0].amount).toBe(paymentRequired.accepts[1].amount);
     });
   });
 });

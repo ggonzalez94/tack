@@ -16,14 +16,18 @@ import {
   type X402PaymentConfig
 } from '../../src/services/x402';
 
-const testConfig: X402PaymentConfig = {
+const taikoChain = {
+  network: 'eip155:167000' as const,
   facilitatorUrl: 'http://localhost:9999',
-  network: 'eip155:167000',
   payTo: '0x1111111111111111111111111111111111111111',
   usdcAssetAddress: '0x2222222222222222222222222222222222222222',
   usdcAssetDecimals: 6,
   usdcDomainName: 'USD Coin',
-  usdcDomainVersion: '2',
+  usdcDomainVersion: '2'
+};
+
+const testConfig: X402PaymentConfig = {
+  chains: [taikoChain],
   ratePerGbMonthUsd: 0.10,
   minPriceUsd: 0.001,
   maxPriceUsd: 50.0,
@@ -92,10 +96,17 @@ const mockFacilitator: FacilitatorClient = {
     extensions: string[];
     signers: Record<string, string[]>;
   }> {
+    const baseNetwork = 'eip155:8453';
     return Promise.resolve({
-      kinds: [{ x402Version: 2, scheme: 'exact', network: testConfig.network }],
+      kinds: [
+        { x402Version: 2, scheme: 'exact', network: taikoChain.network },
+        { x402Version: 2, scheme: 'exact', network: baseNetwork }
+      ],
       extensions: [],
-      signers: { [testConfig.network]: [testConfig.payTo] }
+      signers: {
+        [taikoChain.network]: [taikoChain.payTo],
+        [baseNetwork]: [taikoChain.payTo]
+      }
     });
   }
 };
@@ -167,10 +178,10 @@ describe('x402 payment integration helpers', () => {
       x402Version: 2,
       accepted: {
         scheme: 'exact',
-        network: testConfig.network,
-        asset: testConfig.usdcAssetAddress,
+        network: taikoChain.network,
+        asset: taikoChain.usdcAssetAddress,
         amount: '1000',
-        payTo: testConfig.payTo,
+        payTo: taikoChain.payTo,
         maxTimeoutSeconds: 60
       },
       payload: {
@@ -268,7 +279,7 @@ describe('x402 middleware', () => {
       payload: {
         authorization: {
           from: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          to: testConfig.payTo,
+          to: taikoChain.payTo,
           value: accepted.amount,
           validAfter: '0',
           validBefore: '9999999999',
@@ -295,7 +306,7 @@ describe('x402 middleware', () => {
 
     const settlement = decodePaymentResponseHeader(paymentResponseHeader!);
     expect(settlement.success).toBe(true);
-    expect(settlement.network).toBe(testConfig.network);
+    expect(settlement.network).toBe(taikoChain.network);
   });
 
   it('uses the normalized public URL in payment requirements', async () => {
@@ -374,5 +385,48 @@ describe('x402 middleware', () => {
       })
     );
     expect(paidPremium.status).toBe(200);
+  });
+
+  it('advertises one accepts entry per registered chain with matching asset amount', async () => {
+    const baseChain = {
+      network: 'eip155:8453' as const,
+      facilitatorUrl: 'http://localhost:9998',
+      payTo: taikoChain.payTo,
+      usdcAssetAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      usdcAssetDecimals: 6,
+      usdcDomainName: 'USD Coin',
+      usdcDomainVersion: '2'
+    };
+    const multiChainConfig: X402PaymentConfig = {
+      ...testConfig,
+      chains: [taikoChain, baseChain]
+    };
+
+    const app = new Hono();
+    app.use(createX402PaymentMiddleware(multiChainConfig, mockFacilitator));
+    app.post('/pins', (c) => c.json({ ok: true }));
+
+    const unpaid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cid: 'bafy-test' })
+      })
+    );
+
+    expect(unpaid.status).toBe(402);
+    const paymentRequiredHeader = unpaid.headers.get('payment-required');
+    expect(paymentRequiredHeader).toBeTruthy();
+    const paymentRequired = decodePaymentRequiredHeader(paymentRequiredHeader!);
+
+    expect(paymentRequired.accepts).toHaveLength(2);
+    expect(paymentRequired.accepts[0].network).toBe('eip155:167000');
+    expect(paymentRequired.accepts[1].network).toBe('eip155:8453');
+    expect(paymentRequired.accepts[0].payTo).toBe(taikoChain.payTo);
+    expect(paymentRequired.accepts[1].payTo).toBe(baseChain.payTo);
+    // USDC has 6 decimals on both chains; the same USD price → same asset amount.
+    expect(paymentRequired.accepts[0].amount).toBe(paymentRequired.accepts[1].amount);
+    expect(paymentRequired.accepts[0].asset).toBe(taikoChain.usdcAssetAddress);
+    expect(paymentRequired.accepts[1].asset).toBe(baseChain.usdcAssetAddress);
   });
 });
