@@ -415,7 +415,6 @@ export function landingPageHtml(): string {
       content: ''; position: absolute; inset: 0 0 auto 0; height: 2px;
       background: var(--_c);
     }
-    .rail-card.c-taiko { --_c: var(--pink-300); }
     .rail-card.c-tempo { --_c: var(--tempo-300); }
     .rail-card.c-x402  { --_c: var(--pink-300); --_c2: var(--base-300); }
 
