@@ -388,6 +388,7 @@ interface AppEnv {
     walletAddress: string | null;
     walletAuthError: string | null;
     paymentResult?: import('./services/payment/types.js').PaymentResult;
+    paymentSettlementCallbacks?: import('./services/payment/types.js').PaymentSettlementCallbacks[];
   };
 }
 

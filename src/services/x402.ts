@@ -13,7 +13,7 @@ import {
 import type { MiddlewareHandler } from 'hono';
 import type { PaymentPayload } from '@x402/core/types';
 import { logger } from './logger';
-import type { PaymentResult } from './payment/types.js';
+import type { PaymentResult, PaymentSettlementCallbacks } from './payment/types.js';
 import {
   calculatePriceUsd,
   parseDurationMonths,
@@ -351,6 +351,29 @@ function extractTracingHeaders(source: Headers): Headers {
   return headers;
 }
 
+function chainNameFromNetwork(network: string | undefined): string {
+  switch (network) {
+    case 'eip155:8453':
+      return 'base';
+    case 'eip155:167000':
+      return 'taiko';
+    default:
+      return network ?? 'unknown';
+  }
+}
+
+async function runSettlementCallbacks(
+  callbacks: PaymentSettlementCallbacks[] | undefined,
+  phase: 'success' | 'failure'
+): Promise<void> {
+  for (const callback of callbacks ?? []) {
+    const fn = phase === 'success' ? callback.onSettlementSuccess : callback.onSettlementFailure;
+    if (fn) {
+      await fn();
+    }
+  }
+}
+
 function createPaymentMiddleware(httpServer: x402HTTPResourceServer): MiddlewareHandler {
   let initPromise: Promise<void> | null = httpServer.initialize();
 
@@ -400,11 +423,21 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
       }
       case 'payment-verified': {
         const { paymentPayload, paymentRequirements, declaredExtensions } = result;
+        const wallet = extractWalletFromPayload(paymentPayload);
+        if (wallet) {
+          c.set('paymentResult' as any, {
+            wallet,
+            protocol: 'x402',
+            chainName: chainNameFromNetwork(paymentRequirements.network)
+          } satisfies PaymentResult);
+        }
+        c.set('paymentSettlementCallbacks' as any, []);
 
         await next();
 
         let res = c.res;
         if (res.status >= 400) {
+          await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'failure');
           return;
         }
 
@@ -421,6 +454,7 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
 
           if (!settleResult.success) {
             const { response } = settleResult;
+            await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'failure');
             const body = response.isHtml
               ? (typeof response.body === 'string' ? response.body : '')
               : JSON.stringify(response.body ?? {});
@@ -435,12 +469,14 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
               headers: errorHeaders
             });
           } else {
+            await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'success');
             Object.entries(settleResult.headers).forEach(([key, value]) => {
               res.headers.set(key, value);
             });
           }
         } catch (error) {
           logger.error({ err: error, path: context.path, method: context.method }, 'unexpected settlement error');
+          await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'failure');
           const fallbackHeaders = extractTracingHeaders(res.headers);
           res = new Response(JSON.stringify(createUnexpectedSettlementFailureResponseBody()), {
             status: 402,
