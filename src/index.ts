@@ -27,6 +27,7 @@ import { createMppInstance } from './services/payment/mpp';
 import { BASE_CHAIN } from './services/payment/chains/base';
 import { createMppPaymentMiddleware } from './services/payment/middleware';
 import { createTempoPayerResolver, type FetchTempoReceipt } from './services/payment/mpp-payer';
+import { requireOwnerWalletFromHeaders } from './services/payment/owner-auth';
 import {
   calculatePriceUsd,
   formatUsdAmount,
@@ -241,15 +242,10 @@ function resolveUploadPriceUsd(c: Context): number {
 }
 
 function requireOwnerWalletForMppRenewal(c: Context): string {
-  const wallet = c.get('walletAddress') as string | null;
-  if (wallet) {
-    return wallet;
-  }
-
-  const authError = c.get('walletAuthError') as string | null;
-  throw new HTTPException(401, {
-    message: authError ?? 'authenticated wallet identity is required (bearer token)',
-  });
+  // Derive owner from the raw request so this helper works identically on
+  // the full Hono context and on the minimal Context shim that the Tempo
+  // payer resolver rebuilds during post-charge payer lookup.
+  return requireOwnerWalletFromHeaders(c.req.raw.headers, walletAuthConfig);
 }
 
 // Shared MPP price resolution — single source of truth for both

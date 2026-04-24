@@ -997,6 +997,11 @@ Machine-readable A2A agent card: GET /.well-known/agent.json
       throw new PayloadTooLargeError(`Private object exceeds ${privateObjectMaxSizeBytes} bytes`);
     }
 
+    const declaredRequestSize = parseDeclaredRequestSize(c.req.raw.headers);
+    if (declaredRequestSize !== null && declaredRequestSize > privateObjectMaxSizeBytes + MULTIPART_REQUEST_SIZE_OVERHEAD_BYTES) {
+      throw new PayloadTooLargeError(`Private object exceeds ${privateObjectMaxSizeBytes} bytes`);
+    }
+
     const upload = await parsePrivateObjectUpload(c);
     if (upload.content.byteLength !== declaredSize) {
       throw new ValidationError('X-Content-Size-Bytes must match object size');

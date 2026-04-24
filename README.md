@@ -74,6 +74,8 @@ Implements the [IPFS Pinning Service API](https://ipfs.github.io/pinning-service
 
 Tack can also store wallet-owned private objects that are not pinned to IPFS. Create objects with `POST /private/objects` using x402 or MPP payment, then read them with `Authorization: Bearer <x-wallet-auth-token>`. Returning clients can authenticate through SIWE:
 
+> "Private" here means access-gated by wallet ownership — bytes are not end-to-end encrypted. If you need confidentiality from the operator, encrypt client-side before upload.
+
 1. `POST /auth/challenge` with `{ "address": "0x...", "network": "eip155:8453" }`.
 2. Sign the returned message with a wallet or OWS:
    `ows sign message --chain eip155:8453 --message "$SIWE_MESSAGE" --json`.

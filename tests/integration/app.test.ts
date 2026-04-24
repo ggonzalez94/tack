@@ -34,6 +34,7 @@ import {
   type ResolveVerifiedPayer
 } from '../../src/services/payment/middleware';
 import { createMppChallengeEnhancer } from '../../src/services/payment/challenge-enhancer';
+import { requireOwnerWalletFromHeaders } from '../../src/services/payment/owner-auth';
 
 const walletA = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const walletB = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -687,6 +688,27 @@ describe('API integration', () => {
 
     expect(createRes.status).toBe(400);
     expect(await createRes.json()).toEqual({ error: 'X-Content-Size-Bytes must match object size' });
+  });
+
+  it('rejects private object uploads with oversized content-length before buffering the body', async () => {
+    // Client lies with a tiny x-content-size-bytes to cheap out on payment,
+    // but sends a huge body. The guard must reject on content-length before
+    // we buffer the request into memory.
+    const overhead = 64 * 1024;
+    const max = 1024 * 1024;
+    const oversizedLength = max + overhead + 1;
+    const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => ({
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'x-content-size-bytes': '10',
+        'content-length': String(oversizedLength)
+      },
+      body: new Uint8Array(oversizedLength)
+    }));
+
+    expect(createRes.status).toBe(413);
+    expect(await createRes.json()).toEqual({ error: `Private object exceeds ${max} bytes` });
   });
 
   it('serves gateway content with content-type detection, range support, and cache hits', async () => {
@@ -1683,6 +1705,101 @@ describe('API integration', () => {
         })
       );
       expect(reachVictimDelete.status).toBe(404);
+    });
+
+    it('persists MPP private-renewal when payer resolution rebuilds the context shim', async () => {
+      // Regression: production wires `resolveVerifiedPayer` through
+      // `createTempoPayerResolver`, whose `getContext` rebuilds a minimal
+      // Context shim (only `req`) and calls `requirementFn` a second time
+      // to re-derive pricing. That shim has no `c.get('walletAddress')`.
+      // The previous renewal code path reached into `c.get`, threw on the
+      // shim, and the renewal was never persisted even though MPP had
+      // already settled on-chain.
+      const stub = createStubMppxHandler();
+
+      const requirementFn = (c: {
+        req: { path: string; method: string; raw: Request };
+      }) => {
+        if (c.req.path === '/private/objects' && c.req.method === 'POST') {
+          return { amount: '0.001', recipient: taikoChain.payTo };
+        }
+        if (/^\/private\/objects\/[^/]+\/renew$/.test(c.req.path) && c.req.method === 'POST') {
+          requireOwnerWalletFromHeaders(c.req.raw.headers, walletAuthConfig);
+          return { amount: '0.001', recipient: taikoChain.payTo };
+        }
+        return null;
+      };
+
+      let shimRequirementCalls = 0;
+      const resolveVerifiedPayer: ResolveVerifiedPayer = (request) => {
+        const shim = {
+          req: {
+            path: new URL(request.url).pathname,
+            method: request.method,
+            header: (name: string) => request.headers.get(name),
+            raw: request,
+          },
+        };
+        requirementFn(shim as unknown as Parameters<typeof requirementFn>[0]);
+        shimRequirementCalls += 1;
+        return Promise.resolve(walletA);
+      };
+
+      const mppMiddleware = createMppPaymentMiddleware({
+        mppx: stub,
+        requirementFn: requirementFn as Parameters<typeof createMppPaymentMiddleware>[0]['requirementFn'],
+        resolveVerifiedPayer,
+      });
+      const mppChallengeEnhancer = createMppChallengeEnhancer({
+        mppx: stub,
+        requirementFn: requirementFn as Parameters<typeof createMppChallengeEnhancer>[0]['requirementFn'],
+        assetDecimals: 6
+      });
+      const dualApp = buildApp({ mppMiddleware, mppChallengeEnhancer });
+
+      const objectBody = new TextEncoder().encode('mpp private memory');
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'mpp.txt', { type: 'text/plain' }));
+
+      const createRes = await dualApp.request(
+        new Request('http://localhost/private/objects', {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-content-size-bytes': String(objectBody.byteLength),
+            'x-storage-duration-months': '1'
+          },
+          body: form
+        })
+      );
+      expect(createRes.status).toBe(201);
+      const created = await createRes.json() as { id: string; expiresAt: string };
+      const ownerToken = extractIssuedOwnerToken(createRes);
+
+      const renewRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${created.id}/renew`, {
+          method: 'POST',
+          headers: {
+            'x-wallet-auth-token': ownerToken,
+            'authorization': 'Payment stub-credential',
+            'x-storage-duration-months': '6'
+          }
+        })
+      );
+
+      expect(renewRes.status).toBe(200);
+      expect(shimRequirementCalls).toBeGreaterThan(0);
+
+      const metadataRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${created.id}`, {
+          headers: ownerAuthHeaders(ownerToken)
+        })
+      );
+      expect(metadataRes.status).toBe(200);
+      const metadata = await metadataRes.json() as { expiresAt: string };
+      expect(new Date(metadata.expiresAt).getTime()).toBeGreaterThan(
+        new Date(created.expiresAt).getTime()
+      );
     });
 
     it('returns 500 problem+json when the on-chain payer lookup fails after a successful charge', async () => {
