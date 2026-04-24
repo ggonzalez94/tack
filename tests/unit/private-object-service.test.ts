@@ -121,6 +121,24 @@ describe('PrivateObjectService', () => {
     expect(renewed.expires_at).toBe('2026-10-24T12:00:00.000Z');
   });
 
+  it('renews against the accepted request time when persistence is deferred', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-23T12:00:00.000Z'));
+    const created = await service.createObject({
+      owner,
+      content: bytes('renew').buffer,
+      contentType: 'text/plain',
+      durationMonths: 1,
+      paymentStatus: 'paid'
+    });
+
+    const acceptedAt = new Date('2026-05-23T11:59:59.000Z');
+    vi.setSystemTime(new Date('2026-05-23T12:00:01.000Z'));
+    const renewed = service.renewObject(created.id, owner, 6, acceptedAt);
+
+    expect(renewed.expires_at).toBe('2026-11-23T11:59:59.000Z');
+  });
+
   it('lists only paid visible objects for the owner', async () => {
     await service.createObject({
       owner,

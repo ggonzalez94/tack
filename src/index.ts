@@ -5,6 +5,7 @@ import { createPublicClient, http } from 'viem';
 import { getTransactionReceipt } from 'viem/actions';
 import { tempo, tempoModerato } from 'viem/chains';
 import type { Context, MiddlewareHandler } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { getConfig } from './config';
 import { createDb } from './db';
 import { PinRepository } from './repositories/pin-repository';
@@ -239,6 +240,18 @@ function resolveUploadPriceUsd(c: Context): number {
   return calculatePriceUsd(sizeBytes, 1, paymentPricingConfig);
 }
 
+function requireOwnerWalletForMppRenewal(c: Context): string {
+  const wallet = c.get('walletAddress') as string | null;
+  if (wallet) {
+    return wallet;
+  }
+
+  const authError = c.get('walletAuthError') as string | null;
+  throw new HTTPException(401, {
+    message: authError ?? 'authenticated wallet identity is required (bearer token)',
+  });
+}
+
 // Shared MPP price resolution — single source of truth for both
 // the per-route middleware and the challenge enhancer.
 async function resolveMppRequirement(c: Context): Promise<{ amount: string; recipient: string } | null> {
@@ -280,14 +293,19 @@ async function resolveMppRequirement(c: Context): Promise<{ amount: string; reci
   const privateRenewMatch = /^\/private\/objects\/([^/]+)\/renew$/.exec(c.req.path);
   if (privateRenewMatch && c.req.method === 'POST') {
     const objectId = decodeURIComponent(privateRenewMatch[1] ?? '');
-    const record = privateObjectRepository.findById(objectId);
+    const owner = requireOwnerWalletForMppRenewal(c);
+    const record = privateObjectRepository.findVisibleByIdAndOwner(objectId, owner, new Date().toISOString());
+    if (!record) {
+      throw new HTTPException(404, { message: 'Private object was not found' });
+    }
+
     const durationMonths = parseDurationMonths(
       c.req.header('x-storage-duration-months'),
       config.x402DefaultDurationMonths,
       config.x402MaxDurationMonths
     );
     return {
-      amount: formatUsdAmount(calculatePriceUsd(record?.size_bytes ?? 0, durationMonths, paymentPricingConfig)),
+      amount: formatUsdAmount(calculatePriceUsd(record.size_bytes, durationMonths, paymentPricingConfig)),
       recipient: config.mppPayTo,
     };
   }

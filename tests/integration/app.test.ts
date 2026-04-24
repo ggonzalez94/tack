@@ -593,6 +593,62 @@ describe('API integration', () => {
     expect(await contentRes.text()).toBe('private memory');
   });
 
+  it('does not persist x402 private object renewals when settlement fails', async () => {
+    const objectBody = new TextEncoder().encode('private memory');
+    const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => {
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'memory.txt', { type: 'text/plain' }));
+      return {
+        method: 'POST',
+        headers: {
+          'x-content-size-bytes': String(objectBody.byteLength),
+          'x-storage-duration-months': '1'
+        },
+        body: form
+      };
+    });
+
+    expect(createRes.status).toBe(201);
+    const ownerToken = extractIssuedOwnerToken(createRes);
+    const created = await createRes.json() as { id: string; expiresAt: string };
+
+    const failingPaymentMiddleware = createX402PaymentMiddleware(
+      paymentConfig,
+      createSettlementFailureFacilitator(),
+      {
+        resolvePrivateObjectRenewal: (objectId) => {
+          const record = privateObjectRepository.findById(objectId);
+          return record ? { sizeBytes: record.size_bytes } : null;
+        }
+      }
+    );
+    const failingApp = buildApp({ paymentMiddleware: failingPaymentMiddleware });
+
+    const renewRes = await paidRequest(
+      failingApp,
+      `http://localhost/private/objects/${created.id}/renew`,
+      walletA,
+      () => ({
+        method: 'POST',
+        headers: {
+          ...ownerAuthHeaders(ownerToken),
+          'x-storage-duration-months': '6'
+        }
+      })
+    );
+
+    expect(renewRes.status).toBe(402);
+
+    const metadataRes = await app.request(
+      new Request(`http://localhost/private/objects/${created.id}`, {
+        headers: ownerAuthHeaders(ownerToken)
+      })
+    );
+    expect(metadataRes.status).toBe(200);
+    const metadata = await metadataRes.json() as { expiresAt: string };
+    expect(metadata.expiresAt).toBe(created.expiresAt);
+  });
+
   it('hides private objects from another wallet', async () => {
     const objectBody = new TextEncoder().encode('secret');
     const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => {
@@ -1479,6 +1535,78 @@ describe('API integration', () => {
       );
       expect(contentRes.status).toBe(200);
       expect(await contentRes.text()).toBe('mpp private memory');
+    });
+
+    it('rejects MPP private renewals without owner auth before charging', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub);
+      const objectBody = new TextEncoder().encode('mpp private memory');
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'mpp.txt', { type: 'text/plain' }));
+
+      const createRes = await dualApp.request(
+        new Request('http://localhost/private/objects', {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-content-size-bytes': String(objectBody.byteLength)
+          },
+          body: form
+        })
+      );
+      expect(createRes.status).toBe(201);
+      const body = await createRes.json() as { id: string };
+      stub.chargeCalls.length = 0;
+
+      const renewRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${body.id}/renew`, {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-storage-duration-months': '6'
+          }
+        })
+      );
+
+      expect(renewRes.status).toBe(401);
+      expect(stub.chargeCalls).toHaveLength(0);
+    });
+
+    it('rejects MPP private renewals for the wrong owner before charging', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub);
+      const objectBody = new TextEncoder().encode('mpp private memory');
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'mpp.txt', { type: 'text/plain' }));
+
+      const createRes = await dualApp.request(
+        new Request('http://localhost/private/objects', {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-content-size-bytes': String(objectBody.byteLength)
+          },
+          body: form
+        })
+      );
+      expect(createRes.status).toBe(201);
+      const body = await createRes.json() as { id: string };
+      const otherOwnerToken = createWalletAuthToken(walletB, walletAuthConfig).token;
+      stub.chargeCalls.length = 0;
+
+      const renewRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${body.id}/renew`, {
+          method: 'POST',
+          headers: {
+            'x-wallet-auth-token': otherOwnerToken,
+            'authorization': 'Payment stub-credential',
+            'x-storage-duration-months': '6'
+          }
+        })
+      );
+
+      expect(renewRes.status).toBe(404);
+      expect(stub.chargeCalls).toHaveLength(0);
     });
 
     it('ignores a forged credential.source and assigns ownership to the verified payer', async () => {

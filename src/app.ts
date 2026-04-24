@@ -191,6 +191,15 @@ function toPrivateObjectResponse(record: StoredPrivateObjectRecord): Record<stri
   };
 }
 
+function getPrivateObjectRenewalId(path: string): string | null {
+  const match = /^\/private\/objects\/([^/]+)\/renew$/.exec(path);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  return decodeURIComponent(match[1]);
+}
+
 function parseRequiredObjectSize(headers: Headers): number {
   const raw = headers.get('x-content-size-bytes');
   const parsed = raw === null ? NaN : Number(raw);
@@ -560,6 +569,20 @@ export function createApp(services: AppServices): Hono<AppEnv> {
       }, 'request failed');
       throw error;
     }
+  });
+
+  // Private renewals need owner authorization before any pre-handler payment settlement.
+  app.use('/private/objects/*', async (c, next) => {
+    if (c.req.method === 'POST') {
+      const objectId = getPrivateObjectRenewalId(c.req.path);
+      if (objectId) {
+        const privateObjects = requirePrivateObjectService(services);
+        const owner = requireOwnerWallet(c);
+        privateObjects.getObject(objectId, owner);
+      }
+    }
+
+    await next();
   });
 
   // MPP middleware runs first on payment-gated routes
@@ -1128,6 +1151,7 @@ Machine-readable A2A agent card: GET /.well-known/agent.json
 
   app.post('/private/objects/:objectId/renew', (c) => {
     const privateObjects = requirePrivateObjectService(services);
+    const objectId = c.req.param('objectId');
     const owner = requireOwnerWallet(c);
     const paymentResult = c.get('paymentResult');
     const paidWallet = paymentResult?.wallet ?? requirePaidWallet(c.req.raw.headers);
@@ -1140,7 +1164,19 @@ Machine-readable A2A agent card: GET /.well-known/agent.json
       services.defaultDurationMonths ?? 1,
       services.maxDurationMonths ?? 24
     );
-    const record = privateObjects.renewObject(c.req.param('objectId'), owner, durationMonths);
+    const settlementCallbacks = c.get('paymentSettlementCallbacks');
+    const renewAt = new Date();
+    if (settlementCallbacks) {
+      const record = privateObjects.previewRenewObject(objectId, owner, durationMonths, renewAt);
+      settlementCallbacks.push({
+        onSettlementSuccess: () => {
+          privateObjects.renewObject(objectId, owner, durationMonths, renewAt);
+        }
+      });
+      return c.json(toPrivateObjectResponse(record));
+    }
+
+    const record = privateObjects.renewObject(objectId, owner, durationMonths, renewAt);
     return c.json(toPrivateObjectResponse(record));
   });
 

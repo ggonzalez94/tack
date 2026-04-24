@@ -44,12 +44,11 @@ function normalizeOwner(owner: string): string {
   return normalized;
 }
 
-function computeExpiresAt(durationMonths: number | undefined): string | null {
+function computeExpiresAt(durationMonths: number | undefined, now = new Date()): string | null {
   if (durationMonths === undefined || durationMonths <= 0) {
     return null;
   }
 
-  const now = new Date();
   const targetYear = now.getUTCFullYear();
   const targetMonth = now.getUTCMonth() + durationMonths;
   const maxDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
@@ -72,6 +71,18 @@ function createObjectId(): string {
 
 function storageKeyForObject(id: string): string {
   return `objects/${id.slice(4, 6)}/${id}`;
+}
+
+function renewedRecord(
+  existing: StoredPrivateObjectRecord,
+  durationMonths: number,
+  now = new Date()
+): StoredPrivateObjectRecord {
+  return {
+    ...existing,
+    expires_at: computeExpiresAt(durationMonths, now),
+    updated: now.toISOString()
+  };
 }
 
 export class PrivateObjectService {
@@ -110,7 +121,11 @@ export class PrivateObjectService {
   }
 
   getObject(id: string, owner: string): StoredPrivateObjectRecord {
-    const record = this.repository.findVisibleByIdAndOwner(id, normalizeOwner(owner), new Date().toISOString());
+    return this.getObjectAt(id, owner, new Date());
+  }
+
+  private getObjectAt(id: string, owner: string, now: Date): StoredPrivateObjectRecord {
+    const record = this.repository.findVisibleByIdAndOwner(id, normalizeOwner(owner), now.toISOString());
     if (!record) {
       throw new NotFoundError(`Private object ${id} was not found`);
     }
@@ -179,13 +194,23 @@ export class PrivateObjectService {
     await this.storage.delete(existing.storage_key);
   }
 
-  renewObject(id: string, owner: string, durationMonths: number): StoredPrivateObjectRecord {
-    const existing = this.getObject(id, owner);
-    const renewed = {
-      ...existing,
-      expires_at: computeExpiresAt(durationMonths),
-      updated: new Date().toISOString()
-    };
+  previewRenewObject(
+    id: string,
+    owner: string,
+    durationMonths: number,
+    now = new Date()
+  ): StoredPrivateObjectRecord {
+    const existing = this.getObjectAt(id, owner, now);
+    return renewedRecord(existing, durationMonths, now);
+  }
+
+  renewObject(
+    id: string,
+    owner: string,
+    durationMonths: number,
+    now = new Date()
+  ): StoredPrivateObjectRecord {
+    const renewed = this.previewRenewObject(id, owner, durationMonths, now);
     this.repository.update(id, renewed);
     return renewed;
   }
