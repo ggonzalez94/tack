@@ -10,10 +10,13 @@ Built for AI agents, developer tooling, and any machine that needs to store data
 
 | Endpoint | URL |
 |---|---|
-| API | `https://tack.inferenceroom.ai` |
+| Primary API | `https://tack.inferenceroom.ai` |
+| Direct API | `https://tack.taiko.xyz` |
 | Health | `GET /health` |
 | Agent Card (A2A) | `GET /.well-known/agent.json` |
 | IPFS Gateway | `GET /ipfs/<cid>` |
+
+Both API origins are supported. `tack.inferenceroom.ai` is the primary public entrypoint; `tack.taiko.xyz` remains a direct API hostname.
 
 ## Quickstart
 
