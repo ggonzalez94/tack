@@ -1,0 +1,118 @@
+name: deploy-landing
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - src/landing.ts
+      - scripts/build-landing.ts
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/deploy-landing.yml
+  push:
+    branches:
+      - main
+    paths:
+      - src/landing.ts
+      - scripts/build-landing.ts
+      - package.json
+      - pnpm-lock.yaml
+      - .github/workflows/deploy-landing.yml
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+concurrency:
+  group: deploy-landing-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  deploy-preview:
+    name: Preview
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]' }}
+    runs-on: [arc-runner-set]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build landing
+        run: pnpm build:landing
+
+      - name: Deploy preview to Vercel
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          url=$(npx vercel@51 deploy ./dist/landing --yes --token="$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview URL on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          marker="<!-- landing-preview-url -->"
+          body=$(printf '%s\n**Landing preview:** %s\n\nBuilt from %s' "$marker" "$PREVIEW_URL" "${GITHUB_SHA:0:7}")
+          existing_id=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [ -n "$existing_id" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${existing_id}" \
+              --method PATCH --field body="$body"
+          else
+            gh pr comment "$PR_NUMBER" --body "$body"
+          fi
+
+  deploy-production:
+    name: Production
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: [arc-runner-set]
+    timeout-minutes: 10
+    environment:
+      name: production-landing
+      url: https://tack.inferenceroom.ai
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build landing
+        run: pnpm build:landing
+
+      - name: Deploy production to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          npx vercel@51 deploy ./dist/landing --prod --yes --token="$VERCEL_TOKEN"
