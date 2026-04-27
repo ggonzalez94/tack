@@ -20,7 +20,7 @@ on:
       api_base_url:
         description: "Public Tack base URL for post-deploy checks"
         required: false
-        default: "https://tack.taiko.xyz"
+        default: "https://tack.inferenceroom.ai"
         type: string
       run_paid_smoke:
         description: Run paid x402 smoke after deployment when configured
@@ -47,7 +47,7 @@ on:
         type: string
       api_base_url:
         required: false
-        default: "https://tack.taiko.xyz"
+        default: "https://tack.inferenceroom.ai"
         type: string
       run_paid_smoke:
         required: false

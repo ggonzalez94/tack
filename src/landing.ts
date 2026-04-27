@@ -1,4 +1,4 @@
-const PROD_URL = process.env.LANDING_URL ?? 'https://tack.taiko.xyz';
+const PROD_URL = process.env.LANDING_URL ?? 'https://tack.inferenceroom.ai';
 
 export function landingPageHtml(): string {
   const o = PROD_URL;

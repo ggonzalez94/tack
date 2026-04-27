@@ -90,7 +90,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: production-landing
-      url: https://tack.taiko.xyz
+      url: https://tack.inferenceroom.ai
 
     steps:
       - name: Checkout
