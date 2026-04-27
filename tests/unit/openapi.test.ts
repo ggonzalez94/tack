@@ -185,6 +185,18 @@ describe('buildOpenApiDocument', () => {
     expect(scheme.name).toBe('Authorization');
   });
 
+  it('documents private object endpoints', () => {
+    const doc = buildOpenApiDocument({ ...baseInput, agentCard: baseAgent });
+    const paths = doc.paths as Record<string, Record<string, Record<string, unknown>>>;
+    expect(paths['/auth/challenge'].post.operationId).toBe('createWalletAuthChallenge');
+    expect(paths['/auth/token'].post.operationId).toBe('createWalletAuthToken');
+    expect(paths['/private/objects'].post.operationId).toBe('createPrivateObject');
+    expect(paths['/private/objects'].post['x-payment-info']).toBeDefined();
+    expect(paths['/private/objects'].get.security).toEqual([{ walletAuthToken: [] }]);
+    expect(paths['/private/objects/{objectId}/content'].get.security).toEqual([{ walletAuthToken: [] }]);
+    expect(paths['/private/objects/{objectId}/renew'].post['x-payment-info']).toBeDefined();
+  });
+
   it('falls back to a generic guidance line when agentCard is omitted', () => {
     const doc = buildOpenApiDocument(baseInput);
     const guidance = (doc.info as Record<string, unknown>)['x-guidance'] as string;

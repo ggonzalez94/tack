@@ -5,12 +5,18 @@ import { createPublicClient, http } from 'viem';
 import { getTransactionReceipt } from 'viem/actions';
 import { tempo, tempoModerato } from 'viem/chains';
 import type { Context, MiddlewareHandler } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { getConfig } from './config';
 import { createDb } from './db';
 import { PinRepository } from './repositories/pin-repository';
+import { PrivateObjectRepository } from './repositories/private-object-repository';
+import { WalletAuthChallengeRepository } from './repositories/wallet-auth-challenge-repository';
 import { IpfsRpcClient } from './services/ipfs-rpc-client';
 import { createApp } from './app';
 import { PinningService } from './services/pinning-service';
+import { LocalPrivateObjectStorage } from './services/private-object-storage';
+import { PrivateObjectService } from './services/private-object-service';
+import { WalletLoginService } from './services/wallet-login';
 import { createX402PaymentMiddleware } from './services/x402';
 import { GatewayContentCache } from './services/content-cache';
 import { InMemoryRateLimiter } from './services/rate-limiter';
@@ -21,6 +27,7 @@ import { createMppInstance } from './services/payment/mpp';
 import { BASE_CHAIN } from './services/payment/chains/base';
 import { createMppPaymentMiddleware } from './services/payment/middleware';
 import { createTempoPayerResolver, type FetchTempoReceipt } from './services/payment/mpp-payer';
+import { requireOwnerWalletFromHeaders } from './services/payment/owner-auth';
 import {
   calculatePriceUsd,
   formatUsdAmount,
@@ -47,6 +54,18 @@ const config = getConfig();
 const appVersion = getAppVersion();
 const db = createDb(config.dbPath);
 const repository = new PinRepository(db);
+const privateObjectRepository = new PrivateObjectRepository(db);
+const walletAuthConfig = {
+  secret: config.walletAuthTokenSecret,
+  issuer: config.walletAuthTokenIssuer,
+  audience: config.walletAuthTokenAudience,
+  ttlSeconds: config.walletAuthTokenTtlSeconds
+};
+const walletLoginService = new WalletLoginService(new WalletAuthChallengeRepository(db), {
+  walletAuth: walletAuthConfig,
+  allowedNetworks: config.walletAuthAllowedNetworks,
+  eip1271RpcUrls: config.walletAuthEip1271RpcUrls
+});
 const ipfsClient = new IpfsRpcClient(config.ipfsApiUrl, {
   timeoutMs: config.ipfsTimeoutMs,
   contentTimeoutMs: Math.max(config.ipfsTimeoutMs, 60000)
@@ -66,6 +85,10 @@ const pinningService = new PinningService(repository, ipfsClient, config.delegat
   maxGatewayContentSizeBytes: config.gatewayMaxContentSizeBytes,
   replicas: replicaClients
 });
+const privateObjectService = new PrivateObjectService(
+  privateObjectRepository,
+  new LocalPrivateObjectStorage(config.privateStoragePath)
+);
 // Build the x402 chains array with the operator-configured primary chain
 // first (Taiko by default) and Base always appended. If the operator has
 // explicitly set X402_NETWORK to Base, treat Base as the primary and skip
@@ -113,6 +136,14 @@ const paymentMiddleware = createX402PaymentMiddleware({
       payTo: policy.payTo,
       priceUsd: policy.priceUsd
     };
+  },
+  resolvePrivateObjectRenewal: (objectId) => {
+    const record = privateObjectRepository.findById(objectId);
+    if (!record) {
+      return null;
+    }
+
+    return { sizeBytes: record.size_bytes };
   }
 });
 
@@ -210,6 +241,13 @@ function resolveUploadPriceUsd(c: Context): number {
   return calculatePriceUsd(sizeBytes, 1, paymentPricingConfig);
 }
 
+function requireOwnerWalletForMppRenewal(c: Context): string {
+  // Derive owner from the raw request so this helper works identically on
+  // the full Hono context and on the minimal Context shim that the Tempo
+  // payer resolver rebuilds during post-charge payer lookup.
+  return requireOwnerWalletFromHeaders(c.req.raw.headers, walletAuthConfig);
+}
+
 // Shared MPP price resolution — single source of truth for both
 // the per-route middleware and the challenge enhancer.
 async function resolveMppRequirement(c: Context): Promise<{ amount: string; recipient: string } | null> {
@@ -231,6 +269,39 @@ async function resolveMppRequirement(c: Context): Promise<{ amount: string; reci
 
     return {
       amount: formatUsdAmount(resolveUploadPriceUsd(c)),
+      recipient: config.mppPayTo,
+    };
+  }
+
+  if (c.req.path === '/private/objects' && c.req.method === 'POST') {
+    const sizeBytes = parseNonNegativeInteger(c.req.header('x-content-size-bytes')) ?? 0;
+    const durationMonths = parseDurationMonths(
+      c.req.header('x-storage-duration-months'),
+      config.x402DefaultDurationMonths,
+      config.x402MaxDurationMonths
+    );
+    return {
+      amount: formatUsdAmount(calculatePriceUsd(sizeBytes, durationMonths, paymentPricingConfig)),
+      recipient: config.mppPayTo,
+    };
+  }
+
+  const privateRenewMatch = /^\/private\/objects\/([^/]+)\/renew$/.exec(c.req.path);
+  if (privateRenewMatch && c.req.method === 'POST') {
+    const objectId = decodeURIComponent(privateRenewMatch[1] ?? '');
+    const owner = requireOwnerWalletForMppRenewal(c);
+    const record = privateObjectRepository.findVisibleByIdAndOwner(objectId, owner, new Date().toISOString());
+    if (!record) {
+      throw new HTTPException(404, { message: 'Private object was not found' });
+    }
+
+    const durationMonths = parseDurationMonths(
+      c.req.header('x-storage-duration-months'),
+      config.x402DefaultDurationMonths,
+      config.x402MaxDurationMonths
+    );
+    return {
+      amount: formatUsdAmount(calculatePriceUsd(record.size_bytes, durationMonths, paymentPricingConfig)),
       recipient: config.mppPayTo,
     };
   }
@@ -308,17 +379,15 @@ const mppChallengeEnhancer: MiddlewareHandler | undefined = mppx
 
 const app = createApp({
   pinningService,
+  privateObjectService,
   paymentMiddleware,
   mppMiddleware,
   mppChallengeEnhancer,
-  walletAuth: {
-    secret: config.walletAuthTokenSecret,
-    issuer: config.walletAuthTokenIssuer,
-    audience: config.walletAuthTokenAudience,
-    ttlSeconds: config.walletAuthTokenTtlSeconds
-  },
+  walletAuth: walletAuthConfig,
+  walletLoginService,
   gatewayCacheControlMaxAgeSeconds: config.gatewayCacheControlMaxAgeSeconds,
   uploadMaxSizeBytes: config.uploadMaxSizeBytes,
+  privateObjectMaxSizeBytes: config.privateObjectMaxSizeBytes,
   publicBaseUrl: config.publicBaseUrl,
   trustProxy: config.trustProxy,
   trustedProxyCidrs: config.trustedProxyCidrs,

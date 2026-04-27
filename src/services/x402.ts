@@ -13,7 +13,7 @@ import {
 import type { MiddlewareHandler } from 'hono';
 import type { PaymentPayload } from '@x402/core/types';
 import { logger } from './logger';
-import type { PaymentResult } from './payment/types.js';
+import type { PaymentResult, PaymentSettlementCallbacks } from './payment/types.js';
 import {
   calculatePriceUsd,
   parseDurationMonths,
@@ -74,8 +74,13 @@ export type RetrievalPaymentResolver = (
   cid: string
 ) => RetrievalPaymentRequirement | null | Promise<RetrievalPaymentRequirement | null>;
 
+export type PrivateObjectRenewalResolver = (
+  objectId: string
+) => { sizeBytes: number } | null | Promise<{ sizeBytes: number } | null>;
+
 export interface X402PaymentMiddlewareOptions {
   resolveRetrievalPayment?: RetrievalPaymentResolver;
+  resolvePrivateObjectRenewal?: PrivateObjectRenewalResolver;
 }
 
 const PAYMENT_REQUIRED_HEADER = 'PAYMENT-REQUIRED';
@@ -111,6 +116,29 @@ function resolveUploadSizeBytes(context: HTTPRequestContext): number {
     parseNonNegativeInteger(context.adapter.getHeader('content-length')) ??
     0
   );
+}
+
+function resolvePrivateObjectSizeBytes(context: HTTPRequestContext): number {
+  return parseNonNegativeInteger(context.adapter.getHeader('x-content-size-bytes')) ?? 0;
+}
+
+function extractPrivateObjectRenewalId(path: string): string | null {
+  const prefix = '/private/objects/';
+  const suffix = '/renew';
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) {
+    return null;
+  }
+
+  const objectId = path.slice(prefix.length, -suffix.length);
+  if (objectId.length === 0 || objectId.includes('/')) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(objectId);
+  } catch {
+    return null;
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -351,6 +379,29 @@ function extractTracingHeaders(source: Headers): Headers {
   return headers;
 }
 
+function chainNameFromNetwork(network: string | undefined): string {
+  switch (network) {
+    case 'eip155:8453':
+      return 'base';
+    case 'eip155:167000':
+      return 'taiko';
+    default:
+      return network ?? 'unknown';
+  }
+}
+
+async function runSettlementCallbacks(
+  callbacks: PaymentSettlementCallbacks[] | undefined,
+  phase: 'success' | 'failure'
+): Promise<void> {
+  for (const callback of callbacks ?? []) {
+    const fn = phase === 'success' ? callback.onSettlementSuccess : callback.onSettlementFailure;
+    if (fn) {
+      await fn();
+    }
+  }
+}
+
 function createPaymentMiddleware(httpServer: x402HTTPResourceServer): MiddlewareHandler {
   let initPromise: Promise<void> | null = httpServer.initialize();
 
@@ -400,11 +451,21 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
       }
       case 'payment-verified': {
         const { paymentPayload, paymentRequirements, declaredExtensions } = result;
+        const wallet = extractWalletFromPayload(paymentPayload);
+        if (wallet) {
+          c.set('paymentResult' as any, {
+            wallet,
+            protocol: 'x402',
+            chainName: chainNameFromNetwork(paymentRequirements.network)
+          } satisfies PaymentResult);
+        }
+        c.set('paymentSettlementCallbacks' as any, []);
 
         await next();
 
         let res = c.res;
         if (res.status >= 400) {
+          await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'failure');
           return;
         }
 
@@ -421,6 +482,7 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
 
           if (!settleResult.success) {
             const { response } = settleResult;
+            await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'failure');
             const body = response.isHtml
               ? (typeof response.body === 'string' ? response.body : '')
               : JSON.stringify(response.body ?? {});
@@ -435,12 +497,14 @@ function createPaymentMiddleware(httpServer: x402HTTPResourceServer): Middleware
               headers: errorHeaders
             });
           } else {
+            await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'success');
             Object.entries(settleResult.headers).forEach(([key, value]) => {
               res.headers.set(key, value);
             });
           }
         } catch (error) {
           logger.error({ err: error, path: context.path, method: context.method }, 'unexpected settlement error');
+          await runSettlementCallbacks(c.get('paymentSettlementCallbacks' as any) as PaymentSettlementCallbacks[] | undefined, 'failure');
           const fallbackHeaders = extractTracingHeaders(res.headers);
           res = new Response(JSON.stringify(createUnexpectedSettlementFailureResponseBody()), {
             status: 402,
@@ -465,6 +529,7 @@ export function createX402PaymentMiddleware(
   }
 
   const retrievalResolver = options?.resolveRetrievalPayment;
+  const privateObjectRenewalResolver = options?.resolvePrivateObjectRenewal;
 
   // When a single facilitator is injected (tests), reuse it for every chain.
   // In production each chain gets its own HTTPFacilitatorClient.
@@ -512,8 +577,57 @@ export function createX402PaymentMiddleware(
       mimeType: 'application/json',
       unpaidResponseBody: makeUnpaidResponseBody('Upload content to IPFS and pin it.'),
       settlementFailedResponseBody: makeSettlementFailedResponseBody()
+    },
+    'POST /private/objects': {
+      accepts: config.chains.map((chain) => ({
+        scheme: 'exact' as const,
+        network: chain.network,
+        payTo: chain.payTo,
+        extra: { name: chain.usdcDomainName, version: chain.usdcDomainVersion },
+        price: (context: HTTPRequestContext) => {
+          const sizeBytes = resolvePrivateObjectSizeBytes(context);
+          const durationMonths = parseDurationMonths(
+            context.adapter.getHeader('x-storage-duration-months'),
+            config.defaultDurationMonths,
+            config.maxDurationMonths
+          );
+          const usdPrice = calculatePriceUsd(sizeBytes, durationMonths, config);
+          return usdToAssetAmount(usdPrice, chain.usdcAssetAddress, chain.usdcAssetDecimals);
+        }
+      })),
+      description: 'Create private object',
+      mimeType: 'application/json',
+      unpaidResponseBody: makeUnpaidResponseBody('Store a private wallet-owned object.', config),
+      settlementFailedResponseBody: makeSettlementFailedResponseBody()
     }
   };
+
+  if (privateObjectRenewalResolver) {
+    routes['POST /private/objects/[objectId]/renew'] = {
+      accepts: config.chains.map((chain) => ({
+        scheme: 'exact' as const,
+        network: chain.network,
+        payTo: chain.payTo,
+        extra: { name: chain.usdcDomainName, version: chain.usdcDomainVersion },
+        price: async (context: HTTPRequestContext) => {
+          const objectId = extractPrivateObjectRenewalId(context.path);
+          const renewal = objectId ? await privateObjectRenewalResolver(objectId) : null;
+          const sizeBytes = renewal?.sizeBytes ?? 0;
+          const durationMonths = parseDurationMonths(
+            context.adapter.getHeader('x-storage-duration-months'),
+            config.defaultDurationMonths,
+            config.maxDurationMonths
+          );
+          const usdPrice = calculatePriceUsd(sizeBytes, durationMonths, config);
+          return usdToAssetAmount(usdPrice, chain.usdcAssetAddress, chain.usdcAssetDecimals);
+        }
+      })),
+      description: 'Renew private object storage',
+      mimeType: 'application/json',
+      unpaidResponseBody: makeUnpaidResponseBody('Renew private object retention.', config),
+      settlementFailedResponseBody: makeSettlementFailedResponseBody()
+    };
+  }
 
   if (retrievalResolver) {
     routes['GET /ipfs/[cid]'] = {

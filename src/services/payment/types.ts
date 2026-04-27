@@ -6,3 +6,8 @@ export interface PaymentResult {
   chainName: string;
   receipt?: string;
 }
+
+export interface PaymentSettlementCallbacks {
+  onSettlementSuccess?: () => void | Promise<void>;
+  onSettlementFailure?: () => void | Promise<void>;
+}

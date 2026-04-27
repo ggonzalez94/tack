@@ -221,11 +221,66 @@ export function buildOpenApiDocument(input: BuildOpenApiInput): Record<string, u
     },
     servers: [{ url: baseUrl }],
     tags: [
+      { name: 'Auth', description: 'Wallet signature login' },
       { name: 'Pins', description: 'Pin lifecycle (IPFS Pinning Service API)' },
       { name: 'Upload', description: 'Direct file upload + pin' },
-      { name: 'Gateway', description: 'IPFS content retrieval' }
+      { name: 'Gateway', description: 'IPFS content retrieval' },
+      { name: 'Private Storage', description: 'Wallet-owned private objects stored outside IPFS' }
     ],
     paths: {
+      '/auth/challenge': {
+        post: {
+          operationId: 'createWalletAuthChallenge',
+          summary: 'Create a SIWE wallet login challenge',
+          tags: ['Auth'],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['address'],
+                  properties: {
+                    address: { type: 'string' },
+                    network: { type: 'string', description: 'CAIP-2 EVM network, e.g. eip155:8453' },
+                    chainId: { type: 'integer', description: 'Numeric EVM chain ID alternative to network' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '201': { description: 'SIWE challenge' },
+            '400': { description: 'Invalid wallet login request' }
+          }
+        }
+      },
+      '/auth/token': {
+        post: {
+          operationId: 'createWalletAuthToken',
+          summary: 'Exchange a signed SIWE message for a wallet auth token',
+          tags: ['Auth'],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['message', 'signature'],
+                  properties: {
+                    message: { type: 'string' },
+                    signature: { type: 'string' }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            '200': { description: 'Wallet auth token' },
+            '400': { description: 'Invalid or expired wallet challenge' }
+          }
+        }
+      },
       '/pins': {
         post: {
           operationId: 'createPin',
@@ -380,6 +435,141 @@ export function buildOpenApiDocument(input: BuildOpenApiInput): Record<string, u
             },
             '404': { description: 'Content not found' },
             '416': { description: 'Range not satisfiable' }
+          }
+        }
+      },
+      '/private/objects': {
+        post: {
+          operationId: 'createPrivateObject',
+          summary: 'Store a wallet-owned private object',
+          tags: ['Private Storage'],
+          'x-payment-info': paid,
+          parameters: [
+            {
+              name: 'X-Content-Size-Bytes',
+              in: 'header',
+              required: true,
+              schema: { type: 'integer', minimum: 0 }
+            },
+            {
+              name: 'X-Storage-Duration-Months',
+              in: 'header',
+              required: false,
+              schema: { type: 'integer', minimum: 1 }
+            }
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'multipart/form-data': {
+                schema: {
+                  type: 'object',
+                  required: ['file'],
+                  properties: {
+                    file: { type: 'string', format: 'binary' },
+                    name: { type: 'string' },
+                    meta: { type: 'string', description: 'JSON object string with string values' }
+                  }
+                }
+              },
+              'application/octet-stream': {
+                schema: { type: 'string', format: 'binary' }
+              }
+            }
+          },
+          responses: {
+            '201': { description: 'Private object metadata' },
+            '402': { description: 'Payment Required' },
+            '413': { description: 'Object exceeds size limit' }
+          }
+        },
+        get: {
+          operationId: 'listPrivateObjects',
+          summary: 'List private objects owned by the authenticated wallet',
+          tags: ['Private Storage'],
+          security: [{ walletAuthToken: [] }],
+          responses: {
+            '200': { description: 'Private object list' },
+            '401': { description: 'Missing or invalid wallet auth token' }
+          }
+        }
+      },
+      '/private/objects/{objectId}': {
+        parameters: [
+          { name: 'objectId', in: 'path', required: true, schema: { type: 'string' } }
+        ],
+        get: {
+          operationId: 'getPrivateObject',
+          summary: 'Get private object metadata',
+          tags: ['Private Storage'],
+          security: [{ walletAuthToken: [] }],
+          responses: {
+            '200': { description: 'Private object metadata' },
+            '404': { description: 'Private object not found' }
+          }
+        },
+        patch: {
+          operationId: 'updatePrivateObject',
+          summary: 'Update private object metadata',
+          tags: ['Private Storage'],
+          security: [{ walletAuthToken: [] }],
+          responses: {
+            '200': { description: 'Private object metadata' },
+            '404': { description: 'Private object not found' }
+          }
+        },
+        delete: {
+          operationId: 'deletePrivateObject',
+          summary: 'Delete a private object',
+          tags: ['Private Storage'],
+          security: [{ walletAuthToken: [] }],
+          responses: {
+            '202': { description: 'Private object deleted' },
+            '404': { description: 'Private object not found' }
+          }
+        }
+      },
+      '/private/objects/{objectId}/content': {
+        parameters: [
+          { name: 'objectId', in: 'path', required: true, schema: { type: 'string' } }
+        ],
+        get: {
+          operationId: 'getPrivateObjectContent',
+          summary: 'Read private object bytes',
+          tags: ['Private Storage'],
+          security: [{ walletAuthToken: [] }],
+          responses: {
+            '200': { description: 'Private object bytes' },
+            '206': { description: 'Partial content' },
+            '404': { description: 'Private object not found' }
+          }
+        },
+        head: {
+          operationId: 'headPrivateObjectContent',
+          summary: 'Read private object content headers',
+          tags: ['Private Storage'],
+          security: [{ walletAuthToken: [] }],
+          responses: {
+            '200': { description: 'Private object content headers' },
+            '404': { description: 'Private object not found' }
+          }
+        }
+      },
+      '/private/objects/{objectId}/renew': {
+        parameters: [
+          { name: 'objectId', in: 'path', required: true, schema: { type: 'string' } }
+        ],
+        post: {
+          operationId: 'renewPrivateObject',
+          summary: 'Pay to extend private object retention',
+          tags: ['Private Storage'],
+          security: [{ walletAuthToken: [] }],
+          'x-payment-info': paid,
+          responses: {
+            '200': { description: 'Private object metadata' },
+            '402': { description: 'Payment Required' },
+            '403': { description: 'Payment wallet does not match owner' },
+            '404': { description: 'Private object not found' }
           }
         }
       },

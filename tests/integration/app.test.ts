@@ -1,17 +1,27 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decodePaymentRequiredHeader, encodePaymentSignatureHeader } from '@x402/core/http';
 import type { FacilitatorClient } from '@x402/core/server';
 import type { PaymentPayload, PaymentRequirements } from '@x402/core/types';
+import { privateKeyToAccount } from 'viem/accounts';
 import { createApp } from '../../src/app';
 import { createDb } from '../../src/db';
 import { GatewayTimeoutError, UpstreamServiceError } from '../../src/lib/errors';
 import { PinRepository } from '../../src/repositories/pin-repository';
+import { PrivateObjectRepository } from '../../src/repositories/private-object-repository';
+import { WalletAuthChallengeRepository } from '../../src/repositories/wallet-auth-challenge-repository';
 import type { IpfsClient } from '../../src/services/ipfs-rpc-client';
 import { GatewayContentCache } from '../../src/services/content-cache';
 import { PinningService } from '../../src/services/pinning-service';
+import { LocalPrivateObjectStorage } from '../../src/services/private-object-storage';
+import { PrivateObjectService } from '../../src/services/private-object-service';
 import { InMemoryRateLimiter } from '../../src/services/rate-limiter';
+import { WalletLoginService } from '../../src/services/wallet-login';
 import {
+  createWalletAuthToken,
   createX402PaymentMiddleware,
   WALLET_AUTH_TOKEN_EXPIRES_AT_RESPONSE_HEADER,
   WALLET_AUTH_TOKEN_RESPONSE_HEADER,
@@ -24,6 +34,7 @@ import {
   type ResolveVerifiedPayer
 } from '../../src/services/payment/middleware';
 import { createMppChallengeEnhancer } from '../../src/services/payment/challenge-enhancer';
+import { requireOwnerWalletFromHeaders } from '../../src/services/payment/owner-auth';
 
 const walletA = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const walletB = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -229,6 +240,9 @@ async function paidRequest(
 describe('API integration', () => {
   let db: Database.Database;
   let service: PinningService;
+  let privateObjectService: PrivateObjectService;
+  let privateObjectRepository: PrivateObjectRepository;
+  let privateStorageDir: string;
   let app: ReturnType<typeof createApp>;
   let ipfsClient: IpfsClient & {
     pinAdd: ReturnType<typeof vi.fn>;
@@ -249,22 +263,36 @@ describe('API integration', () => {
           payTo: policy.payTo,
           priceUsd: policy.priceUsd
         };
+      },
+      resolvePrivateObjectRenewal: (objectId) => {
+        const record = privateObjectRepository.findById(objectId);
+        return record ? { sizeBytes: record.size_bytes } : null;
       }
     });
 
     return createApp({
       pinningService: service,
+      privateObjectService,
       paymentMiddleware,
       walletAuth: walletAuthConfig,
+      walletLoginService: new WalletLoginService(new WalletAuthChallengeRepository(db), {
+        walletAuth: walletAuthConfig,
+        allowedNetworks: ['eip155:167000', 'eip155:8453'],
+        eip1271RpcUrls: {},
+        challengeTtlSeconds: 600
+      }),
       defaultDurationMonths: 1,
       maxDurationMonths: 24,
+      privateObjectMaxSizeBytes: 1024 * 1024,
       ...overrides
     });
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     db = createDb(':memory:');
     const repository = new PinRepository(db);
+    privateObjectRepository = new PrivateObjectRepository(db);
+    privateStorageDir = await mkdtemp(join(tmpdir(), 'tack-private-app-'));
     ipfsClient = {
       pinAdd: vi.fn().mockResolvedValue(undefined),
       pinRm: vi.fn().mockResolvedValue(undefined),
@@ -276,7 +304,15 @@ describe('API integration', () => {
       contentCache: new GatewayContentCache(10 * 1024 * 1024),
       maxGatewayContentSizeBytes: 10 * 1024 * 1024
     });
+    privateObjectService = new PrivateObjectService(
+      privateObjectRepository,
+      new LocalPrivateObjectStorage(privateStorageDir)
+    );
     app = buildApp();
+  });
+
+  afterEach(async () => {
+    await rm(privateStorageDir, { recursive: true, force: true });
   });
 
   it('creates and fetches a pin request', async () => {
@@ -456,6 +492,42 @@ describe('API integration', () => {
     expect(await response.text()).toContain('invalid wallet auth token');
   });
 
+  it('exchanges an OWS-compatible wallet signature for an owner token', async () => {
+    const account = privateKeyToAccount(`0x${'3'.repeat(64)}`);
+    const challengeRes = await app.request(
+      new Request('http://localhost/auth/challenge', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          address: account.address,
+          network: 'eip155:8453'
+        })
+      })
+    );
+    expect(challengeRes.status).toBe(201);
+    const challenge = await challengeRes.json() as { message: string; network: string; chainId: number };
+    expect(challenge.network).toBe('eip155:8453');
+    expect(challenge.chainId).toBe(8453);
+
+    const signature = await account.signMessage({ message: challenge.message });
+    const tokenRes = await app.request(
+      new Request('http://localhost/auth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: challenge.message,
+          signature
+        })
+      })
+    );
+
+    expect(tokenRes.status).toBe(200);
+    const tokenBody = await tokenRes.json() as { wallet: string; token: string };
+    expect(tokenBody.wallet).toBe(account.address.toLowerCase());
+    expect(tokenBody.token).toBeTruthy();
+    expect(tokenRes.headers.get(WALLET_AUTH_TOKEN_RESPONSE_HEADER)).toBe(tokenBody.token);
+  });
+
   it('uploads and fetches IPFS content', async () => {
     const uploadRes = await paidRequest(app, 'http://localhost/upload', walletA, () => {
       const form = new FormData();
@@ -479,6 +551,164 @@ describe('API integration', () => {
     expect(getRes.headers.get('etag')).toBe('"bafy-uploaded-cid"');
     const bytes = new Uint8Array(await getRes.arrayBuffer());
     expect(new TextDecoder().decode(bytes)).toBe('hello world');
+  });
+
+  it('creates and reads a paid private object', async () => {
+    const objectBody = new TextEncoder().encode('private memory');
+    const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => {
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'memory.txt', { type: 'text/plain' }));
+      return {
+        method: 'POST',
+        headers: {
+          'x-content-size-bytes': String(objectBody.byteLength),
+          'x-storage-duration-months': '1'
+        },
+        body: form
+      };
+    });
+
+    expect(createRes.status).toBe(201);
+    const ownerToken = extractIssuedOwnerToken(createRes);
+    const created = await createRes.json() as { id: string; name: string; size: number; private: boolean };
+    expect(created.id).toMatch(/^obj_/);
+    expect(created.name).toBe('memory.txt');
+    expect(created.size).toBe(objectBody.byteLength);
+    expect(created.private).toBe(true);
+
+    const metadataRes = await app.request(
+      new Request(`http://localhost/private/objects/${created.id}`, {
+        headers: ownerAuthHeaders(ownerToken)
+      })
+    );
+    expect(metadataRes.status).toBe(200);
+
+    const contentRes = await app.request(
+      new Request(`http://localhost/private/objects/${created.id}/content`, {
+        headers: ownerAuthHeaders(ownerToken)
+      })
+    );
+    expect(contentRes.status).toBe(200);
+    expect(contentRes.headers.get('cache-control')).toBe('private, no-store');
+    expect(contentRes.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await contentRes.text()).toBe('private memory');
+  });
+
+  it('does not persist x402 private object renewals when settlement fails', async () => {
+    const objectBody = new TextEncoder().encode('private memory');
+    const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => {
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'memory.txt', { type: 'text/plain' }));
+      return {
+        method: 'POST',
+        headers: {
+          'x-content-size-bytes': String(objectBody.byteLength),
+          'x-storage-duration-months': '1'
+        },
+        body: form
+      };
+    });
+
+    expect(createRes.status).toBe(201);
+    const ownerToken = extractIssuedOwnerToken(createRes);
+    const created = await createRes.json() as { id: string; expiresAt: string };
+
+    const failingPaymentMiddleware = createX402PaymentMiddleware(
+      paymentConfig,
+      createSettlementFailureFacilitator(),
+      {
+        resolvePrivateObjectRenewal: (objectId) => {
+          const record = privateObjectRepository.findById(objectId);
+          return record ? { sizeBytes: record.size_bytes } : null;
+        }
+      }
+    );
+    const failingApp = buildApp({ paymentMiddleware: failingPaymentMiddleware });
+
+    const renewRes = await paidRequest(
+      failingApp,
+      `http://localhost/private/objects/${created.id}/renew`,
+      walletA,
+      () => ({
+        method: 'POST',
+        headers: {
+          ...ownerAuthHeaders(ownerToken),
+          'x-storage-duration-months': '6'
+        }
+      })
+    );
+
+    expect(renewRes.status).toBe(402);
+
+    const metadataRes = await app.request(
+      new Request(`http://localhost/private/objects/${created.id}`, {
+        headers: ownerAuthHeaders(ownerToken)
+      })
+    );
+    expect(metadataRes.status).toBe(200);
+    const metadata = await metadataRes.json() as { expiresAt: string };
+    expect(metadata.expiresAt).toBe(created.expiresAt);
+  });
+
+  it('hides private objects from another wallet', async () => {
+    const objectBody = new TextEncoder().encode('secret');
+    const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => {
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'secret.txt', { type: 'text/plain' }));
+      return {
+        method: 'POST',
+        headers: { 'x-content-size-bytes': String(objectBody.byteLength) },
+        body: form
+      };
+    });
+    expect(createRes.status).toBe(201);
+    const created = await createRes.json() as { id: string };
+    const otherToken = createWalletAuthToken(walletB, walletAuthConfig).token;
+
+    const hidden = await app.request(
+      new Request(`http://localhost/private/objects/${created.id}`, {
+        headers: ownerAuthHeaders(otherToken)
+      })
+    );
+
+    expect(hidden.status).toBe(404);
+  });
+
+  it('rejects private object uploads when declared size does not match bytes', async () => {
+    const objectBody = new TextEncoder().encode('secret');
+    const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => {
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'secret.txt', { type: 'text/plain' }));
+      return {
+        method: 'POST',
+        headers: { 'x-content-size-bytes': String(objectBody.byteLength + 1) },
+        body: form
+      };
+    });
+
+    expect(createRes.status).toBe(400);
+    expect(await createRes.json()).toEqual({ error: 'X-Content-Size-Bytes must match object size' });
+  });
+
+  it('rejects private object uploads with oversized content-length before buffering the body', async () => {
+    // Client lies with a tiny x-content-size-bytes to cheap out on payment,
+    // but sends a huge body. The guard must reject on content-length before
+    // we buffer the request into memory.
+    const overhead = 64 * 1024;
+    const max = 1024 * 1024;
+    const oversizedLength = max + overhead + 1;
+    const createRes = await paidRequest(app, 'http://localhost/private/objects', walletA, () => ({
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        'x-content-size-bytes': '10',
+        'content-length': String(oversizedLength)
+      },
+      body: new Uint8Array(oversizedLength)
+    }));
+
+    expect(createRes.status).toBe(413);
+    expect(await createRes.json()).toEqual({ error: `Private object exceeds ${max} bytes` });
   });
 
   it('serves gateway content with content-type detection, range support, and cache hits', async () => {
@@ -543,7 +773,10 @@ describe('API integration', () => {
     const agentCard = (await response.json()) as {
       endpoint: string;
       protocol: string;
-      capabilities: { pinningApi: { endpoints: string[] } };
+      capabilities: {
+        pinningApi: { endpoints: string[] };
+        privateStorage: { storage: string; visibility: string; endpoints: string[] };
+      };
       pricing: { retrieval: { metadataField: string }; pinning: { protocol: string; spec: string } };
       authentication: { walletAuthToken: { description: string; usage: string } };
       links: { x402Spec: string; x402ClientSdk: string; ipfsPinningSpec: string };
@@ -552,6 +785,9 @@ describe('API integration', () => {
     expect(agentCard.protocol).toBe('a2a');
     expect(agentCard.endpoint).toBe('http://localhost');
     expect(agentCard.capabilities.pinningApi.endpoints).toContain('/pins');
+    expect(agentCard.capabilities.privateStorage.storage).toBe('not-ipfs');
+    expect(agentCard.capabilities.privateStorage.visibility).toBe('owner-authenticated');
+    expect(agentCard.capabilities.privateStorage.endpoints).toContain('/private/objects');
     expect(agentCard.pricing.pinning.protocol).toBe('x402');
     expect(agentCard.pricing.pinning.spec).toBe('https://www.x402.org/');
     expect(agentCard.pricing.retrieval.metadataField).toBe('meta.retrievalPrice');
@@ -575,7 +811,7 @@ describe('API integration', () => {
 
     expect(doc.openapi).toBe('3.1.0');
     expect(Object.keys(doc.paths)).toEqual(
-      expect.arrayContaining(['/pins', '/pins/{requestid}', '/upload', '/ipfs/{cid}'])
+      expect.arrayContaining(['/pins', '/pins/{requestid}', '/upload', '/ipfs/{cid}', '/private/objects'])
     );
     expect(doc.components.securitySchemes.walletAuthToken.type).toBe('apiKey');
   });
@@ -1200,6 +1436,12 @@ describe('API integration', () => {
         if (c.req.path === '/upload' && c.req.method === 'POST') {
           return { amount: '0.001', recipient: taikoChain.payTo };
         }
+        if (c.req.path === '/private/objects' && c.req.method === 'POST') {
+          return { amount: '0.001', recipient: taikoChain.payTo };
+        }
+        if (/^\/private\/objects\/[^/]+\/renew$/.test(c.req.path) && c.req.method === 'POST') {
+          return { amount: '0.001', recipient: taikoChain.payTo };
+        }
         return null;
       };
 
@@ -1285,6 +1527,110 @@ describe('API integration', () => {
       expect(listed.results[0].pin.cid).toBe('bafy-mpp-paid');
     });
 
+    it('creates private objects with MPP credentials', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub);
+      const objectBody = new TextEncoder().encode('mpp private memory');
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'mpp.txt', { type: 'text/plain' }));
+
+      const res = await dualApp.request(
+        new Request('http://localhost/private/objects', {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-content-size-bytes': String(objectBody.byteLength)
+          },
+          body: form
+        })
+      );
+
+      expect(res.status).toBe(201);
+      expect(res.headers.get('Payment-Receipt')).toBe('receipt-0.001');
+      const ownerToken = extractIssuedOwnerToken(res);
+      const body = await res.json() as { id: string };
+
+      const contentRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${body.id}/content`, {
+          headers: ownerAuthHeaders(ownerToken)
+        })
+      );
+      expect(contentRes.status).toBe(200);
+      expect(await contentRes.text()).toBe('mpp private memory');
+    });
+
+    it('rejects MPP private renewals without owner auth before charging', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub);
+      const objectBody = new TextEncoder().encode('mpp private memory');
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'mpp.txt', { type: 'text/plain' }));
+
+      const createRes = await dualApp.request(
+        new Request('http://localhost/private/objects', {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-content-size-bytes': String(objectBody.byteLength)
+          },
+          body: form
+        })
+      );
+      expect(createRes.status).toBe(201);
+      const body = await createRes.json() as { id: string };
+      stub.chargeCalls.length = 0;
+
+      const renewRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${body.id}/renew`, {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-storage-duration-months': '6'
+          }
+        })
+      );
+
+      expect(renewRes.status).toBe(401);
+      expect(stub.chargeCalls).toHaveLength(0);
+    });
+
+    it('rejects MPP private renewals for the wrong owner before charging', async () => {
+      const stub = createStubMppxHandler();
+      const dualApp = buildDualApp(stub);
+      const objectBody = new TextEncoder().encode('mpp private memory');
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'mpp.txt', { type: 'text/plain' }));
+
+      const createRes = await dualApp.request(
+        new Request('http://localhost/private/objects', {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-content-size-bytes': String(objectBody.byteLength)
+          },
+          body: form
+        })
+      );
+      expect(createRes.status).toBe(201);
+      const body = await createRes.json() as { id: string };
+      const otherOwnerToken = createWalletAuthToken(walletB, walletAuthConfig).token;
+      stub.chargeCalls.length = 0;
+
+      const renewRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${body.id}/renew`, {
+          method: 'POST',
+          headers: {
+            'x-wallet-auth-token': otherOwnerToken,
+            'authorization': 'Payment stub-credential',
+            'x-storage-duration-months': '6'
+          }
+        })
+      );
+
+      expect(renewRes.status).toBe(404);
+      expect(stub.chargeCalls).toHaveLength(0);
+    });
+
     it('ignores a forged credential.source and assigns ownership to the verified payer', async () => {
       // A paying attacker sets `source` in the credential JSON to a victim
       // DID. mppx verifies the payment, the server calls its on-chain
@@ -1359,6 +1705,101 @@ describe('API integration', () => {
         })
       );
       expect(reachVictimDelete.status).toBe(404);
+    });
+
+    it('persists MPP private-renewal when payer resolution rebuilds the context shim', async () => {
+      // Regression: production wires `resolveVerifiedPayer` through
+      // `createTempoPayerResolver`, whose `getContext` rebuilds a minimal
+      // Context shim (only `req`) and calls `requirementFn` a second time
+      // to re-derive pricing. That shim has no `c.get('walletAddress')`.
+      // The previous renewal code path reached into `c.get`, threw on the
+      // shim, and the renewal was never persisted even though MPP had
+      // already settled on-chain.
+      const stub = createStubMppxHandler();
+
+      const requirementFn = (c: {
+        req: { path: string; method: string; raw: Request };
+      }) => {
+        if (c.req.path === '/private/objects' && c.req.method === 'POST') {
+          return { amount: '0.001', recipient: taikoChain.payTo };
+        }
+        if (/^\/private\/objects\/[^/]+\/renew$/.test(c.req.path) && c.req.method === 'POST') {
+          requireOwnerWalletFromHeaders(c.req.raw.headers, walletAuthConfig);
+          return { amount: '0.001', recipient: taikoChain.payTo };
+        }
+        return null;
+      };
+
+      let shimRequirementCalls = 0;
+      const resolveVerifiedPayer: ResolveVerifiedPayer = (request) => {
+        const shim = {
+          req: {
+            path: new URL(request.url).pathname,
+            method: request.method,
+            header: (name: string) => request.headers.get(name),
+            raw: request,
+          },
+        };
+        requirementFn(shim as unknown as Parameters<typeof requirementFn>[0]);
+        shimRequirementCalls += 1;
+        return Promise.resolve(walletA);
+      };
+
+      const mppMiddleware = createMppPaymentMiddleware({
+        mppx: stub,
+        requirementFn: requirementFn as Parameters<typeof createMppPaymentMiddleware>[0]['requirementFn'],
+        resolveVerifiedPayer,
+      });
+      const mppChallengeEnhancer = createMppChallengeEnhancer({
+        mppx: stub,
+        requirementFn: requirementFn as Parameters<typeof createMppChallengeEnhancer>[0]['requirementFn'],
+        assetDecimals: 6
+      });
+      const dualApp = buildApp({ mppMiddleware, mppChallengeEnhancer });
+
+      const objectBody = new TextEncoder().encode('mpp private memory');
+      const form = new FormData();
+      form.append('file', new File([objectBody], 'mpp.txt', { type: 'text/plain' }));
+
+      const createRes = await dualApp.request(
+        new Request('http://localhost/private/objects', {
+          method: 'POST',
+          headers: {
+            'authorization': 'Payment stub-credential',
+            'x-content-size-bytes': String(objectBody.byteLength),
+            'x-storage-duration-months': '1'
+          },
+          body: form
+        })
+      );
+      expect(createRes.status).toBe(201);
+      const created = await createRes.json() as { id: string; expiresAt: string };
+      const ownerToken = extractIssuedOwnerToken(createRes);
+
+      const renewRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${created.id}/renew`, {
+          method: 'POST',
+          headers: {
+            'x-wallet-auth-token': ownerToken,
+            'authorization': 'Payment stub-credential',
+            'x-storage-duration-months': '6'
+          }
+        })
+      );
+
+      expect(renewRes.status).toBe(200);
+      expect(shimRequirementCalls).toBeGreaterThan(0);
+
+      const metadataRes = await dualApp.request(
+        new Request(`http://localhost/private/objects/${created.id}`, {
+          headers: ownerAuthHeaders(ownerToken)
+        })
+      );
+      expect(metadataRes.status).toBe(200);
+      const metadata = await metadataRes.json() as { expiresAt: string };
+      expect(new Date(metadata.expiresAt).getTime()).toBeGreaterThan(
+        new Date(created.expiresAt).getTime()
+      );
     });
 
     it('returns 500 problem+json when the on-chain payer lookup fails after a successful charge', async () => {

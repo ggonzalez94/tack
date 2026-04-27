@@ -5,6 +5,7 @@ import type { FacilitatorClient } from '@x402/core/server';
 import type { PaymentPayload, PaymentRequirements } from '@x402/core/types';
 import { describe, expect, it } from 'vitest';
 import { createExternalRequestUrlMiddleware } from '../../src/lib/request-url';
+import type { PaymentResult, PaymentSettlementCallbacks } from '../../src/services/payment/types';
 import {
   calculatePriceUsd,
   createWalletAuthToken,
@@ -240,6 +241,124 @@ describe('x402 payment integration helpers', () => {
 });
 
 describe('x402 middleware', () => {
+  it('sets paymentResult for verified x402 requests', async () => {
+    type Env = { Variables: { paymentResult?: PaymentResult } };
+    const app = new Hono<Env>();
+    app.use(createX402PaymentMiddleware(testConfig, mockFacilitator));
+    app.post('/pins', (c) => c.json({ wallet: c.get('paymentResult')?.wallet }));
+
+    const unpaid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cid: 'bafy-test' })
+      })
+    );
+    const requiredHeader = unpaid.headers.get('payment-required');
+    expect(requiredHeader).toBeTruthy();
+    const paymentRequired = decodePaymentRequiredHeader(requiredHeader!);
+    const accepted = paymentRequired.accepts[0];
+    const paymentPayload: PaymentPayload = {
+      x402Version: paymentRequired.x402Version,
+      accepted,
+      payload: {
+        authorization: {
+          from: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          to: accepted.payTo,
+          value: accepted.amount,
+          validAfter: '0',
+          validBefore: '9999999999',
+          nonce: `0x${'0'.repeat(64)}`
+        },
+        signature: `0x${'1'.repeat(130)}`
+      }
+    };
+
+    const paid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'payment-signature': encodePaymentSignatureHeader(paymentPayload)
+        },
+        body: JSON.stringify({ cid: 'bafy-test' })
+      })
+    );
+
+    expect(paid.status).toBe(200);
+    expect(await paid.json()).toEqual({
+      wallet: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    });
+  });
+
+  it('runs settlement failure callbacks when x402 settlement fails', async () => {
+    type Env = { Variables: { paymentSettlementCallbacks?: PaymentSettlementCallbacks[] } };
+    const app = new Hono<Env>();
+    let failed = false;
+    app.use(createX402PaymentMiddleware(testConfig, {
+      ...mockFacilitator,
+      settle(paymentPayload: PaymentPayload, requirements: PaymentRequirements) {
+        return Promise.resolve({
+          success: false,
+          errorReason: 'forced_failure',
+          errorMessage: 'forced failure',
+          transaction: '',
+          network: requirements.network,
+          payer: extractWallet(paymentPayload)
+        });
+      }
+    }));
+    app.post('/pins', (c) => {
+      c.get('paymentSettlementCallbacks')?.push({
+        onSettlementFailure: () => {
+          failed = true;
+        }
+      });
+      return c.json({ ok: true });
+    });
+
+    const unpaid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cid: 'bafy-test' })
+      })
+    );
+    const requiredHeader = unpaid.headers.get('payment-required');
+    expect(requiredHeader).toBeTruthy();
+    const paymentRequired = decodePaymentRequiredHeader(requiredHeader!);
+    const accepted = paymentRequired.accepts[0];
+    const paymentPayload: PaymentPayload = {
+      x402Version: paymentRequired.x402Version,
+      accepted,
+      payload: {
+        authorization: {
+          from: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          to: accepted.payTo,
+          value: accepted.amount,
+          validAfter: '0',
+          validBefore: '9999999999',
+          nonce: `0x${'0'.repeat(64)}`
+        },
+        signature: `0x${'1'.repeat(130)}`
+      }
+    };
+
+    const paid = await app.request(
+      new Request('http://localhost/pins', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'payment-signature': encodePaymentSignatureHeader(paymentPayload)
+        },
+        body: JSON.stringify({ cid: 'bafy-test' })
+      })
+    );
+
+    expect(paid.status).toBe(402);
+    expect(failed).toBe(true);
+  });
+
   it('returns 402 when payment proof is missing and allows paid requests', async () => {
     const app = new Hono();
     app.use(createX402PaymentMiddleware(testConfig, mockFacilitator));

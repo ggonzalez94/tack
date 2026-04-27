@@ -33,6 +33,9 @@ Thumbs.db
 # Backups
 backups/
 
+# Local planning artifacts
+docs/superpowers/
+
 # Logs
 *.log
 .claude/
