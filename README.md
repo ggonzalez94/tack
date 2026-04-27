@@ -10,7 +10,7 @@ Built for AI agents, developer tooling, and any machine that needs to store data
 
 | Endpoint | URL |
 |---|---|
-| API | `https://tack.taiko.xyz` |
+| API | `https://tack.inferenceroom.ai` |
 | Health | `GET /health` |
 | Agent Card (A2A) | `GET /.well-known/agent.json` |
 | IPFS Gateway | `GET /ipfs/<cid>` |
@@ -19,13 +19,13 @@ Built for AI agents, developer tooling, and any machine that needs to store data
 
 ```bash
 # Pin content for 6 months (first call returns 402 with payment requirements)
-curl -X POST https://tack.taiko.xyz/pins \
+curl -X POST https://tack.inferenceroom.ai/pins \
   -H 'content-type: application/json' \
   -H 'X-Pin-Duration-Months: 6' \
   -d '{"cid":"bafybeigdyrzt...","name":"example.txt"}'
 
 # After x402 payment, retry with signature
-curl -X POST https://tack.taiko.xyz/pins \
+curl -X POST https://tack.inferenceroom.ai/pins \
   -H 'content-type: application/json' \
   -H 'X-Pin-Duration-Months: 6' \
   -H 'payment-signature: <x402-payment-signature>' \
@@ -33,7 +33,7 @@ curl -X POST https://tack.taiko.xyz/pins \
 # Response includes info.expiresAt and x-wallet-auth-token header
 
 # Use the owner token on authenticated routes
-curl https://tack.taiko.xyz/pins/<requestid> \
+curl https://tack.inferenceroom.ai/pins/<requestid> \
   -H 'Authorization: Bearer <x-wallet-auth-token>'
 ```
 

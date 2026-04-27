@@ -9,7 +9,8 @@ Format:
 
 ## [Unreleased]
 
-- None yet.
+### Changed
+- Public API and landing domain moved from `tack.taiko.xyz` to `tack.inferenceroom.ai`. Affects the `LANDING_URL` default, `/llms.txt` `base` fallback, README quickstart, deploy environment URLs, and request-URL test fixtures. Taiko-chain references (x402 facilitator, RPC, payment chain badges) are unchanged — payments still settle on Taiko Alethia.
 
 ## [v0.2.1] - 2026-04-23
 

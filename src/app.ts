@@ -483,7 +483,7 @@ export function createApp(services: AppServices): Hono<AppEnv> {
   });
 
   app.get('/llms.txt', (c) => {
-    const base = publicBaseUrl ?? 'https://tack.taiko.xyz';
+    const base = publicBaseUrl ?? 'https://tack.inferenceroom.ai';
     const agent = services.agentCard;
     const rate = agent?.x402RatePerGbMonthUsd;
     const minPrice = agent?.x402MinPriceUsd;
